@@ -6,7 +6,8 @@
 
 mod errors;
 mod migration;
-mod rate_limit;
+// Public so `tests/storage_keys.rs` can assert on persisted rate-limit keys.
+pub mod rate_limit;
 mod sanitization;
 mod storage;
 pub mod types;
@@ -59,6 +60,10 @@ mod list_hunts_test;
 #[cfg(test)]
 #[path = "paused_status_test.rs"]
 mod paused_status_test;
+// Regression tests for #1011-#1014 (admin persistence, reward-config auth,
+// global pause checks, duplicate registration).
+#[cfg(test)]
+mod security_1011_1014_test;
 const MAX_QUESTION_LENGTH: u32 = 2000;
 const MAX_ANSWER_LENGTH: u32 = 256;
 /// Maximum invite-code length in bytes.
@@ -116,9 +121,13 @@ impl HuntyCore {
     /// Sets the contract admin once. Subsequent calls require current admin auth via set_admin.
     pub fn initialize_admin(env: Env, admin: Address) -> Result<(), HuntErrorCode> {
         admin.require_auth();
+        // #1011: persist the bootstrap admin so require_admin()-gated entrypoints
+        // (pause_contract, set_reward_manager, ...) actually resolve an admin.
+        // A second call must never silently reassign the admin.
         if Storage::get_admin(&env).is_some() {
             return Err(HuntErrorCode::Unauthorized);
         }
+        Storage::set_admin(&env, &admin);
         Ok(())
     }
 
@@ -157,7 +166,6 @@ impl HuntyCore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     fn ensure_not_paused(env: &Env) -> Result<(), HuntErrorCode> {
         if Storage::is_contract_paused(env) {
             return Err(HuntErrorCode::ContractPaused);
@@ -1214,6 +1222,7 @@ impl HuntyCore {
         player: Address,
     ) -> Result<String, HuntErrorCode> {
         player.require_auth();
+        Self::ensure_not_paused(&env)?;
         let _cache = Self::validate_hunt_active_cached(&env, hunt_id)?;
         let clue =
             Storage::get_clue_or_error(&env, hunt_id, clue_id).map_err(HuntErrorCode::from)?;
@@ -2041,7 +2050,10 @@ impl HuntyCore {
         Ok(hunt)
     }
 
-    /// Convenience helper used in tests to set reward configuration on a hunt.
+    /// Sets the reward configuration for a hunt.
+    /// Only the hunt creator (or a co-creator) may do this, and only while the
+    /// hunt is still in `Draft` — reward parameters must not be mutable once
+    /// players can register (#1012).
     /// Sets nft_image_uri to a placeholder when nft_enabled is true.
     pub fn set_reward_config(
         env: Env,
@@ -2050,8 +2062,20 @@ impl HuntyCore {
         xlm_pool: i128,
         nft_enabled: bool,
         nft_contract: Option<Address>,
+        caller: Address,
     ) -> Result<(), HuntErrorCode> {
+        caller.require_auth();
+
         let mut hunt = Storage::get_hunt(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
+
+        if !Storage::is_authorized_creator_or_co_creator(&env, hunt_id, &caller) {
+            return Err(HuntErrorCode::Unauthorized);
+        }
+
+        if hunt.status != HuntStatus::Draft {
+            return Err(HuntErrorCode::InvalidHuntStatus);
+        }
+
         let uri = if nft_enabled {
             Some(String::from_str(&env, "https://example.com/nft.png"))
         } else {
@@ -2414,6 +2438,7 @@ impl HuntyCore {
     /// * `DuplicateRegistration` - Player is already registered for this hunt
     pub fn register_player(env: Env, hunt_id: u64, player: Address) -> Result<(), HuntErrorCode> {
         player.require_auth();
+        Self::ensure_not_paused(&env)?;
 
         if Storage::is_pause_registrations(&env) {
             return Err(HuntErrorCode::RegistrationsPaused);
@@ -2727,6 +2752,7 @@ impl HuntyCore {
         invite_code: String,
     ) -> Result<(), HuntErrorCode> {
         player.require_auth();
+        Self::ensure_not_paused(&env)?;
 
         if Storage::is_pause_registrations(&env) {
             return Err(HuntErrorCode::RegistrationsPaused);
@@ -2817,6 +2843,7 @@ impl HuntyCore {
     ) -> Result<bool, HuntErrorCode> {
         // Require player authorization
         player.require_auth();
+        Self::ensure_not_paused(&env)?;
 
         if Storage::is_pause_answers(&env) {
             return Err(HuntErrorCode::AnswersPaused);
@@ -3130,6 +3157,7 @@ impl HuntyCore {
     ) -> Result<(), HuntErrorCode> {
         // Require player authorization
         player.require_auth();
+        Self::ensure_not_paused(&env)?;
 
         if Storage::is_pause_answers(&env) {
             return Err(HuntErrorCode::AnswersPaused);
@@ -3256,6 +3284,7 @@ impl HuntyCore {
         submitted_at: u64,
     ) -> Result<(), HuntErrorCode> {
         player.require_auth();
+        Self::ensure_not_paused(&env)?;
 
         if Storage::is_pause_answers(&env) {
             return Err(HuntErrorCode::AnswersPaused);

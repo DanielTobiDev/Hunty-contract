@@ -4,8 +4,8 @@
 #![allow(deprecated)]
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal, Map,
-    Symbol, TryFromVal, Val, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, IntoVal, Map, Symbol,
+    TryFromVal, Val, Vec,
 };
 
 pub use crate::errors::RewardErrorCode;
@@ -373,12 +373,7 @@ impl RewardManager {
     /// Constructor - runs atomically during deployment.
     /// Prevents front-running by initializing during deploy transaction.
     #[allow(unused_variables)]
-    pub fn __constructor(
-        env: Env,
-        admin: Address,
-        xlm_token: Address,
-        hunty_core: Address,
-    ) {
+    pub fn __constructor(env: Env, admin: Address, xlm_token: Address, hunty_core: Address) {
         Storage::set_admin(&env, &admin);
         Storage::set_xlm_token(&env, &xlm_token);
         Storage::set_hunty_core(&env, &hunty_core);
@@ -1358,8 +1353,10 @@ impl RewardManager {
         // Verify the hunt is in a terminal state (Cancelled or past end_time).
         // HuntyCore exposes this as `is_hunt_terminal`; when HuntyCore is not
         // configured the check is skipped and the creator is trusted.
-        if !Self::is_hunt_terminal(&env, hunt_id) {
-            return Err(RewardErrorCode::InvalidHuntStatus);
+        if let Some(hunty_core) = Storage::get_hunty_core(&env) {
+            if !Self::is_hunt_terminal(&env, &hunty_core, hunt_id) {
+                return Err(RewardErrorCode::InvalidHuntStatus);
+            }
         }
 
         let balance = Storage::get_pool_balance(&env, hunt_id);

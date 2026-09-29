@@ -66,6 +66,8 @@ pub enum HuntErrorCode {
     InvalidPoints = 49,
     HuntFull = 50,
     LeaderboardVisibilityUnauthorized = 51,
+    InviteCodeRequired = 52,
+    TooManyAliases = 53,
 }
 
 #[derive(Debug)]
@@ -122,6 +124,8 @@ pub enum HuntError {
     AttemptCooldownNotExpired,
     HuntFull,
     PrivateHuntRequiresInvite,
+    InviteCodeRequired,
+    TooManyAliases,
 }
 
 impl From<HuntError> for HuntErrorCode {
@@ -179,6 +183,8 @@ impl From<HuntError> for HuntErrorCode {
             HuntError::AttemptCooldownNotExpired => HuntErrorCode::RateLimitExceeded,
             HuntError::HuntFull => HuntErrorCode::HuntFull,
             HuntError::PrivateHuntRequiresInvite => HuntErrorCode::Unauthorized,
+            HuntError::InviteCodeRequired => HuntErrorCode::InviteCodeRequired,
+            HuntError::TooManyAliases => HuntErrorCode::TooManyAliases,
         }
     }
 }

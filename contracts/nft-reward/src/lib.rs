@@ -1,7 +1,8 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Env, Map, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Map, String,
+    Symbol, Vec,
 };
 
 pub const MAX_NFT_URI_BYTES: u32 = 100;
@@ -94,19 +95,31 @@ impl NftReward {
         metadata: CollectionMetadata,
     ) {
         // Store admin
-        env.storage().instance().set(&symbol_short!("ADMIN"), &admin);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("ADMIN"), &admin);
         // Store minter
-        env.storage().instance().set(&symbol_short!("MINTER"), &minter);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("MINTER"), &minter);
         // Store max supply if provided
         if let Some(max) = max_supply {
-            env.storage().instance().set(&symbol_short!("MAXSPLY"), &max);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("MAXSPLY"), &max);
         }
         // Store collection metadata
-        env.storage().instance().set(&symbol_short!("COLMETA"), &metadata);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("COLMETA"), &metadata);
         // Initialize total supply to 0
-        env.storage().instance().set(&symbol_short!("TOTSPLY"), &0u64);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("TOTSPLY"), &0u64);
         // Initialize NFT counter to 0
-        env.storage().instance().set(&symbol_short!("NFTCNT"), &0u64);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("NFTCNT"), &0u64);
     }
 
     pub fn initialize(
