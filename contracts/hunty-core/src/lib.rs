@@ -910,7 +910,17 @@ impl HuntyCore {
     }
 
     /// Returns clue information for a hunt/clue. Does not expose the answer hash.
+    ///
+    /// # Access model
+    /// Clue questions are only returned once the hunt is `Active` and the
+    /// current ledger time is within `[start_time, end_time)`. This prevents
+    /// players from reading questions before registration and solving them
+    /// offline, which would let them game time-based scoring decay and
+    /// reward tiers (both measured from registration/`started_at`).
+    /// Callers that need to preview clues before activation must use the
+    /// creator-only draft inspection paths.
     pub fn get_clue(env: Env, hunt_id: u64, clue_id: u32) -> Result<ClueInfo, HuntErrorCode> {
+        Self::require_hunt_started(&env, hunt_id)?;
         let clue =
             Storage::get_clue_or_error(&env, hunt_id, clue_id).map_err(HuntErrorCode::from)?;
         Ok(ClueInfo {
@@ -927,8 +937,16 @@ impl HuntyCore {
 
     /// Returns paginated clues for a hunt. Answer hashes are not exposed.
     /// A `limit` of `0` defaults to `DEFAULT_PAGE_SIZE`.
+    ///
+    /// # Access model
+    /// Like [`Self::get_clue`], questions are only returned once the hunt is
+    /// `Active` and within its play window. Before that, an empty page is
+    /// returned so callers cannot enumerate questions pre-registration.
     pub fn list_clues(env: Env, hunt_id: u64, offset: u32, limit: u32) -> Vec<ClueInfo> {
         let limit = if limit == 0 { DEFAULT_PAGE_SIZE } else { limit };
+        if Self::require_hunt_started(&env, hunt_id).is_err() {
+            return Vec::new(&env);
+        }
         let raw = Storage::list_clues_for_hunt(&env, hunt_id, offset, limit.min(MAX_BATCH_SIZE));
         let mut out = Vec::new(&env);
         let limit = core::cmp::min(raw.len(), MAX_BATCH_SIZE);
@@ -1193,6 +1211,11 @@ impl HuntyCore {
         page: u32,
         page_size: u32,
     ) -> Vec<ClueInfo> {
+        // Same access model as `get_clue`/`list_clues`: no questions are
+        // exposed until the hunt is Active and inside its play window.
+        if Self::require_hunt_started(&env, hunt_id).is_err() {
+            return Vec::new(&env);
+        }
         let page_size = if page_size == 0 {
             DEFAULT_PAGE_SIZE
         } else {
@@ -1402,6 +1425,25 @@ impl HuntyCore {
         Ok(cache)
     }
 
+    /// Returns `Ok(())` only when the hunt is `Active` and the current ledger
+    /// time is inside the hunt's play window (`start_time <= now < end_time`,
+    /// treating `0` as "unbounded"). This is the gate used by the public clue
+    /// read paths so questions cannot be harvested before registration.
+    fn require_hunt_started(env: &Env, hunt_id: u64) -> Result<(), HuntErrorCode> {
+        let cache = Self::get_hunt_cache_or_load(env, hunt_id)?;
+        let current_time = env.ledger().timestamp();
+        if cache.status != HuntStatus::Active {
+            return Err(HuntErrorCode::HuntNotActive);
+        }
+        if cache.start_time != 0 && current_time < cache.start_time {
+            return Err(HuntErrorCode::HuntNotActive);
+        }
+        if cache.end_time != 0 && current_time >= cache.end_time {
+            return Err(HuntErrorCode::HuntNotActive);
+        }
+        Ok(())
+    }
+
     fn emit_hunt_status_changed(
         env: &Env,
         hunt_id: u64,
@@ -1434,6 +1476,11 @@ impl HuntyCore {
     }
 
     /// Resolves the XLM amount for the completing player.
+    ///
+    /// Elapsed time for time-based tiers is measured from the hunt's play
+    /// window start (`activated_at`, falling back to `start_time`) rather than
+    /// the player's registration time, so pre-registration question harvesting
+    /// cannot shorten the measured elapsed time and inflate the tier.
     ///
     /// If the hunt's rewardManager-configured pool has a matching
     /// `rank_based_tiers` entry, that exact completion-rank amount wins.
@@ -1489,8 +1536,16 @@ impl HuntyCore {
             return hunt.reward_config.reward_per_winner();
         }
 
-        // Compute elapsed time. If started_at is missing, zero selects the smallest tier.
-        let elapsed = progress.completed_at.saturating_sub(progress.started_at);
+        // Compute elapsed time from the hunt's play window start, not from the
+        // player's registration time. This closes the pre-registration question
+        // harvesting exploit: a player who reads all questions before
+        // registering can no longer compress the measured elapsed time.
+        let window_start = if hunt.activated_at != 0 {
+            hunt.activated_at
+        } else {
+            hunt.start_time
+        };
+        let elapsed = progress.completed_at.saturating_sub(window_start);
 
         match reward_interface::resolve_tier_amount(tiers, elapsed) {
             Some(amount) if amount > 0 => amount,
