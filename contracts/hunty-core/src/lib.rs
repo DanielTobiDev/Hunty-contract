@@ -499,6 +499,8 @@ impl HuntyCore {
         max_attempts_per_clue: u32,
         attempt_cooldown_secs: u32,
     ) -> Result<(), HuntErrorCode> {
+        caller.require_auth();
+
         if max_attempts_per_clue == 0 {
             return Err(HuntErrorCode::InvalidMaxAttempts);
         }
