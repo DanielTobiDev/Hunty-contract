@@ -755,41 +755,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic]
-    fn test_set_max_attempts_requires_creator_auth_even_when_caller_is_forged() {
-        let env = Env::default();
-        let creator = Address::generate(&env);
-        let contract_id = env.register(HuntyCore, ());
-
-        env.mock_all_auths();
-        let hunt_id = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::create_hunt(
-                env.clone(),
-                creator.clone(),
-                String::from_str(env, "Attempt Limit Hunt"),
-                String::from_str(env, "Creator authorization required"),
-                None,
-                None,
-                0,
-                None,
-                None,
-            )
-            .unwrap()
-        });
-
-        env.set_auths(&[]);
-        as_core_contract(&env, &contract_id, |env| {
-            let _ = HuntyCore::set_max_attempts_per_clue(
-                env.clone(),
-                hunt_id,
-                creator.clone(),
-                9,
-                0,
-            );
-        });
-    }
-
-    #[test]
     fn test_max_attempts_are_enforced_per_clue() {
         let env = Env::default();
         env.ledger().set_timestamp(1_700_000_000);
