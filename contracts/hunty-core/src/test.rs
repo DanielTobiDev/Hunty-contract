@@ -5188,6 +5188,50 @@ mod test {
                 let err =
                     HuntyCore::deactivate_hunt(env.clone(), hunt_id, attacker.clone()).unwrap_err();
                 assert_eq!(err, HuntErrorCode::Unauthorized);
+                let hunt = Storage::get_hunt(env, hunt_id).unwrap();
+                assert_eq!(hunt.status, HuntStatus::Active);
+            });
+        }
+
+        #[test]
+        #[should_panic]
+        fn test_deactivate_hunt_requires_creator_auth() {
+            let env = Env::default();
+            env.ledger().set_timestamp(1_700_000_000);
+            env.mock_all_auths();
+
+            let creator = Address::generate(&env);
+            let question = String::from_str(&env, "Valid question");
+            let answer = String::from_str(&env, "a");
+
+            with_core_contract(&env, |env, _cid| {
+                let hunt_id = HuntyCore::create_hunt(
+                    env.clone(),
+                    creator.clone(),
+                    String::from_str(env, "Test Hunt"),
+                    String::from_str(env, "Test description"),
+                    None,
+                    None,
+                    0,
+                    None,
+                    None,
+                )
+                .unwrap();
+                HuntyCore::add_clue(
+                    env.clone(),
+                    hunt_id,
+                    question,
+                    answer,
+                    1,
+                    true,
+                    Some(1),
+                    None,
+                )
+                .unwrap();
+                HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+
+                env.set_auths(&[]);
+                let _ = HuntyCore::deactivate_hunt(env.clone(), hunt_id, creator.clone());
             });
         }
 
