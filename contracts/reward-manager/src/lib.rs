@@ -49,6 +49,16 @@ const MAX_BATCH_SIZE: u32 = 10;
 /// an arbitrarily large number of distributions.
 const MAX_ANALYTICS_ENTRIES: u32 = 500;
 
+/// Maximum number of entries allowed in a pool's time-based or rank-based tier
+/// list (issue #1081).
+///
+/// The whole `RewardPoolConfig` — tiers included — is read on every
+/// distribution and by HuntyCore at completion, so a pathologically long tier
+/// list would make every payout for that hunt expensive or impossible. Both
+/// `set_pool_tiers` and `set_pool_rank_tiers` reject lists longer than this cap
+/// with `InvalidConfig`, leaving any previously stored config untouched.
+pub const MAX_TIER_ENTRIES: u32 = 20;
+
 #[contract]
 pub struct RewardManager;
 
@@ -259,6 +269,15 @@ pub struct EmergencyWithdrawalEvent {
     pub timestamp: u64,
 }
 
+/// Event emitted when the contract is paused.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ContractPausedEvent {
+    pub admin: Address,
+    pub reason: soroban_sdk::String,
+    pub timestamp: u64,
+}
+
 /// Log entry for emergency withdrawal record-keeping.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -302,6 +321,21 @@ pub struct VestedClaimedEvent {
 
 #[contractimpl]
 impl RewardManager {
+    /// Returns true when HuntyCore reports the hunt as terminal (cancelled or completed).
+    #[allow(dead_code)]
+    fn is_hunt_terminal(env: &Env, hunt_id: u64) -> bool {
+        let core = match Storage::get_hunty_core(env) {
+            Some(c) => c,
+            None => return false,
+        };
+        let mut args: Vec<Val> = Vec::new(env);
+        args.push_back(hunt_id.into_val(env));
+        let result: Val = env.invoke_contract(&core, &Symbol::new(env, "get_hunt_status"), args);
+        let status: u32 = result.into_val(env);
+        // HuntyCore terminal statuses: Cancelled = 3, Completed = 4.
+        status == 3 || status == 4
+    }
+
     fn is_delegate(config: &RewardPoolConfig, candidate: &Address) -> bool {
         for i in 0..config.delegates.len() {
             if config.delegates.get(i).unwrap() == *candidate {
@@ -309,6 +343,34 @@ impl RewardManager {
             }
         }
         false
+    }
+
+    /// Reads a player's score for a hunt directly from HuntyCore.
+    ///
+    /// `distribute_proportional` must never trust caller-supplied scores, so
+    /// the authoritative value is fetched from the core contract instead.
+    fn read_player_score(env: &Env, hunt_id: u64, player: &Address) -> i128 {
+        let core = match Storage::get_hunty_core(env) {
+            Some(c) => c,
+            None => return 0,
+        };
+        let mut args: Vec<Val> = Vec::new(env);
+        args.push_back(hunt_id.into_val(env));
+        args.push_back(player.clone().into_val(env));
+        let result: Val = env.invoke_contract(&core, &Symbol::new(env, "get_player_score"), args);
+        result.into_val(env)
+    }
+
+    /// Reads the total score for a hunt directly from HuntyCore.
+    fn read_total_score(env: &Env, hunt_id: u64) -> i128 {
+        let core = match Storage::get_hunty_core(env) {
+            Some(c) => c,
+            None => return 0,
+        };
+        let mut args: Vec<Val> = Vec::new(env);
+        args.push_back(hunt_id.into_val(env));
+        let result: Val = env.invoke_contract(&core, &Symbol::new(env, "get_total_score"), args);
+        result.into_val(env)
     }
 
     /// Current semantic version of this contract.
@@ -568,6 +630,7 @@ impl RewardManager {
             nft_royalty_bps,
             nft_transferable,
             rank_based_tiers: Vec::new(&env),
+            frozen_by: None,
         };
         Storage::set_pool_config(&env, hunt_id, &config);
 
@@ -666,8 +729,21 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
+        let old_value = config.min_distribution_amount;
         config.min_distribution_amount = min_distribution_amount;
         Storage::set_pool_config(&env, hunt_id, &config);
+
+        env.events().publish(
+            (symbol_short!("PL_MINAMT"), hunt_id),
+            (creator.clone(), old_value, min_distribution_amount),
+        );
+        Self::record_config_change(
+            &env,
+            hunt_id,
+            &creator,
+            PoolOperation::UpdateMinAmount,
+            Some(min_distribution_amount),
+        );
 
         Ok(())
     }
@@ -692,8 +768,21 @@ impl RewardManager {
             return Err(RewardErrorCode::InvalidAmount);
         }
 
+        let old_value = config.target_amount;
         config.target_amount = target_amount;
         Storage::set_pool_config(&env, hunt_id, &config);
+
+        env.events().publish(
+            (symbol_short!("PL_TARGET"), hunt_id),
+            (creator.clone(), old_value, target_amount),
+        );
+        Self::record_config_change(
+            &env,
+            hunt_id,
+            &creator,
+            PoolOperation::SetTargetAmount,
+            Some(target_amount),
+        );
         Ok(())
     }
 
@@ -713,8 +802,21 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        let old_value = config.min_distribution_interval_secs;
         config.min_distribution_interval_secs = min_distribution_interval_secs;
         Storage::set_pool_config(&env, hunt_id, &config);
+
+        env.events().publish(
+            (symbol_short!("PL_INTVL"), hunt_id),
+            (creator.clone(), old_value, min_distribution_interval_secs),
+        );
+        Self::record_config_change(
+            &env,
+            hunt_id,
+            &creator,
+            PoolOperation::SetDistributionInterval,
+            None,
+        );
         Ok(())
     }
 
@@ -734,8 +836,21 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        let old_value = config.distribution_mode;
         config.distribution_mode = mode;
         Storage::set_pool_config(&env, hunt_id, &config);
+
+        env.events().publish(
+            (symbol_short!("PL_MODE"), hunt_id),
+            (creator.clone(), old_value, mode),
+        );
+        Self::record_config_change(
+            &env,
+            hunt_id,
+            &creator,
+            PoolOperation::SetDistributionMode,
+            None,
+        );
         Ok(())
     }
 
@@ -761,8 +876,9 @@ impl RewardManager {
     /// # Errors
     /// * `PoolNotFound` - No pool exists for this hunt_id
     /// * `Unauthorized` - Caller is not the pool creator
-    /// * `InvalidConfig` - Tier list (when non-empty) contains a zero/negative
-    ///   amount or is not strictly ascending
+    /// * `InvalidConfig` - Tier list is longer than [`MAX_TIER_ENTRIES`], or
+    ///   (when non-empty) contains a zero/negative amount or is not strictly
+    ///   ascending
     pub fn set_pool_tiers(
         env: Env,
         creator: Address,
@@ -778,9 +894,16 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        // Bound the tier list so the per-distribution config read stays cheap
+        // and deterministic (issue #1081). Reject before any mutation so a
+        // rejected oversized list never overwrites the stored config.
+        let tiers_len = time_based_tiers.len();
+        if tiers_len > MAX_TIER_ENTRIES {
+            return Err(RewardErrorCode::InvalidConfig);
+        }
+
         // Empty tier list is a valid opt-out from tier-based rewards — it
         // disables the feature for this pool. Non-empty lists must validate.
-        let tiers_len = time_based_tiers.len();
         if tiers_len > 0 {
             if let Err(_err) = tiers_are_strictly_ascending(&time_based_tiers) {
                 return Err(RewardErrorCode::InvalidConfig);
@@ -794,6 +917,7 @@ impl RewardManager {
             (symbol_short!("PL_TIERS"), hunt_id),
             (creator.clone(), tiers_len),
         );
+        Self::record_config_change(&env, hunt_id, &creator, PoolOperation::SetTimeTiers, None);
 
         Ok(())
     }
@@ -808,6 +932,12 @@ impl RewardManager {
     ///
     /// Only the pool creator may change this configuration. Changes affect
     /// subsequent distributions and never rewrite an already-recorded payout.
+    ///
+    /// # Errors
+    /// * `PoolNotFound` - No pool exists for this hunt_id
+    /// * `Unauthorized` - Caller is not the pool creator
+    /// * `InvalidConfig` - Tier list is longer than [`MAX_TIER_ENTRIES`], or
+    ///   (when non-empty) is not strictly ascending with positive amounts
     pub fn set_pool_rank_tiers(
         env: Env,
         creator: Address,
@@ -823,18 +953,27 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        // Bound the tier list before any mutation (issue #1081): a rejected
+        // oversized list must not overwrite the stored config.
+        let tier_count = rank_based_tiers.len();
+        if tier_count > MAX_TIER_ENTRIES {
+            return Err(RewardErrorCode::InvalidConfig);
+        }
+
         if !rank_based_tiers.is_empty()
             && rank_tiers_are_strictly_ascending(&rank_based_tiers).is_err()
         {
             return Err(RewardErrorCode::InvalidConfig);
         }
 
-        let tier_count = rank_based_tiers.len();
         config.rank_based_tiers = rank_based_tiers;
         Storage::set_pool_config(&env, hunt_id, &config);
 
-        env.events()
-            .publish((symbol_short!("PL_RTIERS"), hunt_id), (creator, tier_count));
+        env.events().publish(
+            (symbol_short!("PL_RTIERS"), hunt_id),
+            (creator.clone(), tier_count),
+        );
+        Self::record_config_change(&env, hunt_id, &creator, PoolOperation::SetRankTiers, None);
 
         Ok(())
     }
@@ -865,8 +1004,15 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
-        config.nft_contract = nft_contract;
+        let old_value = config.nft_contract.clone();
+        config.nft_contract = nft_contract.clone();
         Storage::set_pool_config(&env, hunt_id, &config);
+
+        env.events().publish(
+            (symbol_short!("PL_NFT"), hunt_id),
+            (creator.clone(), old_value, nft_contract),
+        );
+        Self::record_config_change(&env, hunt_id, &creator, PoolOperation::SetNftContract, None);
 
         Ok(())
     }
@@ -889,8 +1035,15 @@ impl RewardManager {
         }
 
         if !Self::is_delegate(&config, &delegate) {
-            config.delegates.push_back(delegate);
+            config.delegates.push_back(delegate.clone());
             Storage::set_pool_config(&env, hunt_id, &config);
+
+            // Only a real change is recorded; re-adding an existing delegate is a no-op.
+            env.events().publish(
+                (symbol_short!("DLG_ADD"), hunt_id),
+                (creator.clone(), delegate),
+            );
+            Self::record_config_change(&env, hunt_id, &creator, PoolOperation::AddDelegate, None);
         }
 
         Ok(())
@@ -920,8 +1073,24 @@ impl RewardManager {
                 updated.push_back(existing);
             }
         }
+        let removed = updated.len() != config.delegates.len();
         config.delegates = updated;
         Storage::set_pool_config(&env, hunt_id, &config);
+
+        // Only a real change is recorded; removing a non-delegate is a no-op.
+        if removed {
+            env.events().publish(
+                (symbol_short!("DLG_REM"), hunt_id),
+                (creator.clone(), delegate),
+            );
+            Self::record_config_change(
+                &env,
+                hunt_id,
+                &creator,
+                PoolOperation::RemoveDelegate,
+                None,
+            );
+        }
 
         Ok(())
     }
@@ -933,6 +1102,28 @@ impl RewardManager {
     /// rank- and time-based amounts without duplicating pool state.
     pub fn get_pool_config(env: Env, hunt_id: u64) -> Option<RewardPoolConfig> {
         Storage::get_pool_config(&env, hunt_id)
+    }
+
+    /// Appends a pool-config change to the pool audit log. Shared by every
+    /// creator-only setter so each one leaves the same kind of trail as
+    /// create/fund/freeze/withdraw do.
+    fn record_config_change(
+        env: &Env,
+        hunt_id: u64,
+        actor: &Address,
+        operation: PoolOperation,
+        amount: Option<i128>,
+    ) {
+        Storage::append_audit_entry(
+            env,
+            hunt_id,
+            PoolAuditEntry {
+                actor: actor.clone(),
+                operation,
+                timestamp: env.ledger().timestamp(),
+                amount,
+            },
+        );
     }
 
     /// Records `amount` as a contribution from `funder` toward `hunt_id`'s
@@ -1443,6 +1634,7 @@ impl RewardManager {
             creator: config.creator,
             min_distribution_amount: config.min_distribution_amount,
             frozen: config.frozen,
+            frozen_by: config.frozen_by,
         })
     }
 
@@ -1512,8 +1704,7 @@ impl RewardManager {
                 // are never valid.
                 let is_nft_only =
                     config.min_distribution_amount == 0 && config.nft_contract.is_some();
-                let valid_amount =
-                    required_amount > 0 || (required_amount == 0 && is_nft_only);
+                let valid_amount = required_amount > 0 || (required_amount == 0 && is_nft_only);
                 let meets_balance = balance >= required_amount;
                 let meets_minimum = config.min_distribution_amount == 0
                     || required_amount >= config.min_distribution_amount;
@@ -1533,6 +1724,9 @@ impl RewardManager {
     /// Freezes a reward pool, preventing any further distributions.
     ///
     /// Can be called by either the pool creator or the contract admin.
+    /// Records who issued the freeze in `RewardPoolConfig::frozen_by`; an
+    /// admin-issued freeze can only be lifted by the admin (see
+    /// `unfreeze_pool`, #1077).
     /// Emits a `PoolFrozenEvent`.
     ///
     /// # Arguments
@@ -1556,6 +1750,13 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        // Record who issued the freeze. An admin freeze is never downgraded by
+        // a later creator call (which would let the creator lift it again),
+        // while an admin call always (re)asserts an admin freeze over an
+        // existing creator freeze.
+        if is_admin || !config.frozen {
+            config.frozen_by = Some(caller.clone());
+        }
         config.frozen = true;
         Storage::set_pool_config(&env, hunt_id, &config);
 
@@ -1580,7 +1781,11 @@ impl RewardManager {
 
     /// Unfreezes a reward pool, re-enabling distributions.
     ///
-    /// Can be called by either the pool creator or the contract admin.
+    /// Can be called by either the pool creator or the contract admin, except
+    /// that a freeze issued by the admin may only be lifted by the admin
+    /// (#1077). Any freezer other than the pool creator was the admin at the
+    /// time of the freeze, so this restriction also survives an admin rotation.
+    /// Clears `RewardPoolConfig::frozen_by`.
     /// Emits a `PoolUnfrozenEvent`.
     ///
     /// # Arguments
@@ -1589,7 +1794,9 @@ impl RewardManager {
     ///
     /// # Errors
     /// * `PoolNotFound` - No pool exists for this hunt_id
-    /// * `Unauthorized` - Caller is neither the pool creator nor the contract admin
+    /// * `Unauthorized` - Caller is neither the pool creator nor the contract
+    ///   admin, or the current freeze was issued by the admin and the caller is
+    ///   not the admin
     pub fn unfreeze_pool(env: Env, caller: Address, hunt_id: u64) -> Result<(), RewardErrorCode> {
         caller.require_auth();
 
@@ -1604,7 +1811,21 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        // A freeze applied under admin authority may only be lifted by the
+        // admin. The creator cannot record an admin freeze, so "frozen by
+        // anyone other than the creator" means "frozen by the admin" — even if
+        // the admin address has since rotated.
+        let admin_freeze = config
+            .frozen_by
+            .as_ref()
+            .map(|freezer| freezer != &config.creator)
+            .unwrap_or(false);
+        if admin_freeze && !is_admin {
+            return Err(RewardErrorCode::Unauthorized);
+        }
+
         config.frozen = false;
+        config.frozen_by = None;
         Storage::set_pool_config(&env, hunt_id, &config);
 
         env.events().publish(
@@ -2774,8 +2995,21 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
+        let old_value = config.vesting_period_secs;
         config.vesting_period_secs = vesting_period_secs;
         Storage::set_pool_config(&env, hunt_id, &config);
+
+        env.events().publish(
+            (symbol_short!("PL_VEST"), hunt_id),
+            (creator.clone(), old_value, vesting_period_secs),
+        );
+        Self::record_config_change(
+            &env,
+            hunt_id,
+            &creator,
+            PoolOperation::SetVestingPeriod,
+            None,
+        );
 
         Ok(())
     }
@@ -2802,6 +3036,9 @@ impl RewardManager {
     /// * `InsufficientPool` - Contract token balance is too low (should not normally occur)
     pub fn claim_vested(env: Env, player: Address, hunt_id: u64) -> Result<i128, RewardErrorCode> {
         player.require_auth();
+
+        // Check distribution pause and frozen pool
+        Self::ensure_distribution_allowed(&env)?;
 
         let mut record = Storage::get_vesting_record(&env, hunt_id, &player)
             .ok_or(RewardErrorCode::VestingNotStarted)?;
@@ -2834,6 +3071,12 @@ impl RewardManager {
         // Retrieve token address from pool config for the transfer.
         let pool_config =
             Storage::get_pool_config(&env, hunt_id).ok_or(RewardErrorCode::PoolNotFound)?;
+
+        // Check if pool is frozen
+        if pool_config.frozen {
+            return Err(RewardErrorCode::PoolFrozen);
+        }
+
         let token_address = &pool_config.token_address;
 
         let contract_addr = env.current_contract_address();
@@ -2993,12 +3236,30 @@ impl RewardManager {
         start_time: Option<u64>,
         end_time: Option<u64>,
     ) -> DistributionAnalytics {
-        // Load all distributions for the pool (the storage Vec is naturally ordered
-        // by insertion = chronological order).
-        let all = Storage::get_pool_distributions(&env, hunt_id, 0, u32::MAX);
-        let total = all.len();
+        // Read only the most recent MAX_ANALYTICS_ENTRIES from storage
+        // to avoid loading the entire distribution list.
+        let total = Storage::get_pool_distribution_count(&env, hunt_id) as u32;
 
         if total == 0 {
+            return DistributionAnalytics {
+                count: 0,
+                total: 0,
+                average: 0,
+                median: 0,
+                min: 0,
+                max: 0,
+            };
+        }
+
+        // Calculate offset to read only the most recent entries
+        let cap = MAX_ANALYTICS_ENTRIES;
+        let offset = total.saturating_sub(cap);
+        let limit = if total > cap { cap } else { total };
+
+        let recent = Storage::get_pool_distributions(&env, hunt_id, offset, limit);
+        let recent_count = recent.len();
+
+        if recent_count == 0 {
             return DistributionAnalytics {
                 count: 0,
                 total: 0,
@@ -3013,11 +3274,10 @@ impl RewardManager {
         // (most recent first) so that when we cap at MAX_ANALYTICS_ENTRIES we
         // get the most relevant entries.
         let mut amounts: soroban_sdk::Vec<i128> = Vec::new(&env);
-        let mut idx = total as i64 - 1;
-        let cap = MAX_ANALYTICS_ENTRIES;
+        let mut idx = recent_count as i64 - 1;
 
         while idx >= 0 && amounts.len() < cap {
-            if let Some(dist) = all.get(idx as u32) {
+            if let Some(dist) = recent.get(idx as u32) {
                 let ts = dist.timestamp;
                 let in_range = match (start_time, end_time) {
                     (Some(start), Some(end)) => ts >= start && ts < end,
@@ -3315,7 +3575,7 @@ impl RewardManager {
     }
 
     /// Pauses the contract, preventing reward distributions and withdrawals.
-    /// Only the contract admin can call this. Emits an emergency event.
+    /// Only the contract admin can call this. Emits a ContractPausedEvent.
     pub fn pause(
         env: Env,
         admin: Address,
@@ -3329,10 +3589,8 @@ impl RewardManager {
         Storage::set_paused(&env, true);
         env.events().publish(
             (symbol_short!("PAUSED"),),
-            EmergencyWithdrawalEvent {
+            ContractPausedEvent {
                 admin,
-                hunt_id: 0,
-                amount: 0,
                 reason,
                 timestamp: env.ledger().timestamp(),
             },
@@ -3475,13 +3733,20 @@ impl RewardManager {
         }
         let xlm_token = Storage::get_xlm_token(&env).ok_or(RewardErrorCode::NotInitialized)?;
         let contract_addr = env.current_contract_address();
-        let client = soroban_sdk::token::Client::new(&env, &xlm_token);
         let mut total_withdrawn: i128 = 0;
+
+        let get_pool_token = |pid: u64| -> Address {
+            Storage::get_pool_config(&env, pid)
+                .map(|config| config.token_address)
+                .unwrap_or_else(|| xlm_token.clone())
+        };
 
         if hunt_id > 0 {
             // Single pool emergency withdrawal
             let balance = Storage::get_pool_balance(&env, hunt_id);
             if balance > 0 {
+                let token_address = get_pool_token(hunt_id);
+                let client = soroban_sdk::token::Client::new(&env, &token_address);
                 client.transfer(&contract_addr, &recipient, &balance);
                 Storage::set_pool_balance(&env, hunt_id, 0);
                 total_withdrawn = balance;
@@ -3519,6 +3784,8 @@ impl RewardManager {
             for pid in 1..=max_hunt_id {
                 let balance = Storage::get_pool_balance(&env, pid);
                 if balance > 0 {
+                    let token_address = get_pool_token(pid);
+                    let client = soroban_sdk::token::Client::new(&env, &token_address);
                     client.transfer(&contract_addr, &recipient, &balance);
                     Storage::set_pool_balance(&env, pid, 0);
                     total_withdrawn += balance;
@@ -3568,13 +3835,17 @@ impl RewardManager {
     }
 
     /// Returns true if the given NftReward contract meets the minimum required version.
+    /// Returns false on any error (e.g. the address is not an nft-reward contract
+    /// or an old one without `contract_version`) instead of trapping.
     pub fn check_nft_reward_compatibility(env: Env, nft_reward_address: Address) -> bool {
-        let ver: u32 = env.invoke_contract(
-            &nft_reward_address,
-            &soroban_sdk::Symbol::new(&env, "contract_version"),
-            soroban_sdk::Vec::new(&env),
-        );
-        ver >= Self::REQUIRED_NFT_REWARD_VERSION
+        matches!(
+            env.try_invoke_contract::<u32, Val>(
+                &nft_reward_address,
+                &soroban_sdk::Symbol::new(&env, "contract_version"),
+                soroban_sdk::Vec::new(&env),
+            ),
+            Ok(Ok(ver)) if ver >= Self::REQUIRED_NFT_REWARD_VERSION
+        )
     }
 
     pub fn get_schema_version(env: Env) -> u32 {
