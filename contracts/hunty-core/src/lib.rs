@@ -52,6 +52,8 @@ mod tests {
 }
 
 #[cfg(test)]
+mod difficulty_override_test;
+#[cfg(test)]
 mod list_hunts_test;
 #[cfg(test)]
 #[path = "paused_status_test.rs"]
@@ -346,7 +348,7 @@ impl HuntyCore {
             return Err(HuntErrorCode::Unauthorized);
         }
 
-        let has_supply = answers.len() > 0;
+        let has_supply = !answers.is_empty();
         if has_supply && answers.len() != template_clues.len() {
             return Err(HuntErrorCode::InvalidAnswer);
         }
@@ -1066,6 +1068,25 @@ impl HuntyCore {
 
     /// Sets or clears a manual hunt difficulty override. Without an override,
     /// the rating is the average clue difficulty.
+    ///
+    /// Only the hunt creator or a co-creator can change the override, and only
+    /// while the hunt is in Draft status.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `hunt_id` - The hunt to configure
+    /// * `caller` - The creator or co-creator making the change
+    /// * `difficulty_override` - `Some(value)` to set, `None` to clear
+    ///
+    /// # Errors
+    /// * `HuntNotFound` - Hunt does not exist
+    /// * `Unauthorized` - Caller is not the hunt creator or a co-creator
+    /// * `InvalidHuntStatus` - Hunt is not in Draft
+    /// * `InvalidDifficulty` - Override is outside the allowed tier scale
+    ///
+    /// # Events
+    /// * `HuntDifficultyOverrideSet` - Emitted with the hunt id, caller, and
+    ///   the new override value
     pub fn set_hunt_difficulty_override(
         env: Env,
         hunt_id: u64,
@@ -1077,6 +1098,9 @@ impl HuntyCore {
         if !Storage::is_authorized_creator_or_co_creator(&env, hunt_id, &caller) {
             return Err(HuntErrorCode::Unauthorized);
         }
+        if hunt.status != HuntStatus::Draft {
+            return Err(HuntErrorCode::InvalidHuntStatus);
+        }
         if let Some(value) = difficulty_override {
             Self::validate_difficulty(value)?;
             hunt.difficulty_override = Some(value);
@@ -1085,6 +1109,17 @@ impl HuntyCore {
         }
         Self::recalculate_hunt_difficulty(&env, hunt_id, &mut hunt);
         Storage::save_hunt(&env, &hunt);
+
+        let event = HuntDifficultyOverrideSetEvent {
+            hunt_id,
+            caller,
+            difficulty_override,
+        };
+        env.events().publish(
+            (Symbol::new(&env, "HuntDifficultyOverrideSet"), hunt_id),
+            event,
+        );
+
         Ok(())
     }
 
@@ -2524,6 +2559,74 @@ impl HuntyCore {
         Ok(())
     }
 
+    /// Bans a player from participating in a hunt.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `hunt_id` - The hunt to ban the player from
+    /// * `caller` - The hunt creator or the contract admin
+    /// * `player` - The player to ban
+    pub fn ban_player(
+        env: Env,
+        hunt_id: u64,
+        caller: Address,
+        player: Address,
+    ) -> Result<(), HuntErrorCode> {
+        caller.require_auth();
+
+        let is_admin = Storage::get_admin(&env)
+            .map(|a| a == caller)
+            .unwrap_or(false);
+        if !is_admin && !Storage::is_authorized_creator_or_co_creator(&env, hunt_id, &caller) {
+            return Err(HuntErrorCode::Unauthorized);
+        }
+
+        Storage::ban_player(&env, hunt_id, &player);
+
+        let event = PlayerBannedEvent {
+            hunt_id,
+            player: player.clone(),
+        };
+        env.events()
+            .publish((Symbol::new(&env, "PlayerBanned"), hunt_id), event);
+
+        Ok(())
+    }
+
+    /// Unbans a player from a hunt.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `hunt_id` - The hunt to unban the player from
+    /// * `caller` - The hunt creator or the contract admin
+    /// * `player` - The player to unban
+    pub fn unban_player(
+        env: Env,
+        hunt_id: u64,
+        caller: Address,
+        player: Address,
+    ) -> Result<(), HuntErrorCode> {
+        caller.require_auth();
+
+        let is_admin = Storage::get_admin(&env)
+            .map(|a| a == caller)
+            .unwrap_or(false);
+        if !is_admin && !Storage::is_authorized_creator_or_co_creator(&env, hunt_id, &caller) {
+            return Err(HuntErrorCode::Unauthorized);
+        }
+
+        Storage::unban_player(&env, hunt_id, &player);
+
+        let event = PlayerUnbannedEvent {
+            hunt_id,
+            player: player.clone(),
+        };
+        env.events()
+            .publish((Symbol::new(&env, "PlayerUnbanned"), hunt_id), event);
+
+        Ok(())
+    }
+
     /// Registers a player for a private hunt using a valid invite code.
     ///
     /// The provided invite code is hashed (with hunt_id as salt) and compared against
@@ -2668,7 +2771,14 @@ impl HuntyCore {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
 
-        Self::validate_attempt_tracking(&env, &hunt, &mut progress, clue_id, &player, current_time)?;
+        Self::validate_attempt_tracking(
+            &env,
+            &hunt,
+            &mut progress,
+            clue_id,
+            &player,
+            current_time,
+        )?;
 
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
@@ -2689,7 +2799,7 @@ impl HuntyCore {
             progress.recent_submissions.push_back(current_time);
         }
 
-        Storage::save_player_progress(&env, &progress);
+        Storage::save_player_progress(&env, &progress, hunt.activated_at);
 
         let submitted_hash = Self::normalize_and_hash_answer(&env, hunt_id, clue_id, &answer)
             .map_err(HuntErrorCode::from)?;
@@ -2757,15 +2867,11 @@ impl HuntyCore {
             || hunt.time_bonus_decay_secs.is_some()
         {
             TimeBonusConfig {
-                start_multiplier_bps: hunt
-                    .time_bonus_start_bps
-                    .unwrap_or(hunt.start_multiplier_bps.clamp(
-                        MIN_START_MULTIPLIER_BPS,
-                        MAX_START_MULTIPLIER_BPS,
-                    )),
-                min_multiplier_bps: hunt
-                    .time_bonus_min_bps
-                    .unwrap_or(MIN_START_MULTIPLIER_BPS),
+                start_multiplier_bps: hunt.time_bonus_start_bps.unwrap_or(
+                    hunt.start_multiplier_bps
+                        .clamp(MIN_START_MULTIPLIER_BPS, MAX_START_MULTIPLIER_BPS),
+                ),
+                min_multiplier_bps: hunt.time_bonus_min_bps.unwrap_or(MIN_START_MULTIPLIER_BPS),
                 decay_duration_secs: hunt
                     .time_bonus_decay_secs
                     .unwrap_or(DEFAULT_TIME_BONUS_DECAY_SECS),
@@ -2999,7 +3105,14 @@ impl HuntyCore {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
 
-        Self::validate_attempt_tracking(&env, &hunt, &mut progress, clue_id, &player, current_time)?;
+        Self::validate_attempt_tracking(
+            &env,
+            &hunt,
+            &mut progress,
+            clue_id,
+            &player,
+            current_time,
+        )?;
 
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
@@ -3107,7 +3220,14 @@ impl HuntyCore {
             return Err(HuntErrorCode::ClueAlreadyCompleted);
         }
 
-        Self::validate_attempt_tracking(&env, &hunt, &mut progress, clue_id, &player, current_time)?;
+        Self::validate_attempt_tracking(
+            &env,
+            &hunt,
+            &mut progress,
+            clue_id,
+            &player,
+            current_time,
+        )?;
 
         if hunt.max_submissions_per_minute > 0 {
             let mut updated_submissions = Vec::new(&env);
@@ -3390,7 +3510,10 @@ impl HuntyCore {
     ) -> Result<LeaderboardResult, HuntErrorCode> {
         // Cache existence check (cheaper than loading full Hunt)
         Storage::get_hunt_cache(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
-        let total_players = Storage::get_hunt_players(&env, hunt_id).len();
+        // The registration counter is the canonical player total and costs a
+        // single entry read, instead of loading every player's progress record
+        // just to count them.
+        let total_players = Storage::get_player_count(&env, hunt_id);
         let effective_limit = core::cmp::min(limit, MAX_LEADERBOARD_SIZE);
         let entries = Storage::get_leaderboard_index(&env, hunt_id);
         let mut result = Vec::new(&env);
@@ -3419,7 +3542,9 @@ impl HuntyCore {
     /// their compact rows. This method enables clients to page through all
     /// registered players in multiple calls (bounded by `MAX_LEADERBOARD_SCAN_SIZE`)
     /// and merge results off-chain to build a full leaderboard without a single
-    /// large on-chain scan. This read path is public; the `_caller` argument is
+    /// large on-chain scan. Only the requested registration slice is read, so
+    /// the cost of a page depends on `window_size`, not on how many players the
+    /// hunt has. This read path is public; the `_caller` argument is
     /// accepted for forward compatibility and is currently ignored.
     pub fn get_hunt_leaderboard_window(
         env: Env,
@@ -3431,23 +3556,33 @@ impl HuntyCore {
         Storage::get_hunt(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
 
         let queried_at = env.ledger().timestamp();
-        let players = Storage::get_hunt_players(&env, hunt_id);
-        let total_players = players.len();
+        // One counter read replaces loading the full player list just to learn
+        // how many registrations exist.
+        let total_players = Storage::get_player_count(&env, hunt_id);
 
         let start = core::cmp::min(start_index, total_players);
         let capped_window = core::cmp::min(window_size, MAX_LEADERBOARD_SCAN_SIZE);
         let end = core::cmp::min(start.saturating_add(capped_window), total_players);
 
+        // Load progress only for the players inside the requested window.
+        let players =
+            Storage::get_player_addresses_range(&env, hunt_id, start, end.saturating_sub(start));
+
         let mut rows = Vec::new(&env);
-        for i in start..end {
-            // SAFETY: start..end is clamped to [0, players.len())
-            let p = players.get(i).unwrap();
+        for offset in 0..players.len() {
+            // SAFETY: offset is in [0, players.len())
+            let player = players.get(offset).unwrap();
+            let progress = match Storage::get_player_progress(&env, hunt_id, &player) {
+                Some(progress) => progress,
+                // A dangling index entry must not abort the whole page.
+                None => continue,
+            };
             rows.push_back(crate::types::LeaderboardRow {
-                index: i,
-                player: p.player.clone(),
-                score: p.total_score,
-                completed_at: p.completed_at,
-                is_completed: p.is_completed,
+                index: start.saturating_add(offset),
+                player,
+                score: progress.total_score,
+                completed_at: progress.completed_at,
+                is_completed: progress.is_completed,
             });
         }
 
@@ -3892,9 +4027,8 @@ impl HuntyCore {
         migration::HuntyCoreMigration::get_schema_version(&env)
     }
 
-    pub fn initialize_schema(env: Env, admin: Address) {
-        admin.require_auth();
-        migration::HuntyCoreMigration::initialize_schema(&env, &admin);
+    pub fn initialize_schema(env: Env) {
+        migration::HuntyCoreMigration::initialize_schema(&env);
     }
 
     pub fn run_migration(
@@ -3920,6 +4054,71 @@ impl HuntyCore {
 
     pub fn get_health_dashboard(env: Env) -> hunty_common::monitoring::ContractHealth {
         hunty_common::monitoring::Monitoring::health_dashboard(&env)
+    }
+
+    // -----------------------------------------------------------------------------
+    // Rate-limit administration (fixes #1056: previously dead-code)
+    // -----------------------------------------------------------------------------
+
+    /// Bootstrap or transfer the rate-limit admin role.
+    ///
+    /// The first call sets the admin with no prior-admin check. Subsequent
+    /// calls require `caller` to already be the stored admin.
+    pub fn set_rate_limit_admin(
+        env: Env,
+        caller: Address,
+        new_admin: Address,
+    ) -> Result<(), HuntErrorCode> {
+        caller.require_auth();
+        if let Some(current) = Storage::get_rate_limit_admin(&env) {
+            if current != caller {
+                return Err(HuntErrorCode::Unauthorized);
+            }
+        }
+        Storage::set_rate_limit_admin(&env, &new_admin);
+        Ok(())
+    }
+
+    /// Admin-only: override the daily hunt-creation limit for a specific creator.
+    ///
+    /// Pass `limit = 0` to remove an existing override, falling back to the
+    /// contract-wide default.
+    pub fn set_creator_hunt_limit(
+        env: Env,
+        caller: Address,
+        creator: Address,
+        limit: u32,
+    ) -> Result<(), HuntErrorCode> {
+        rate_limit::RateLimiter::require_rate_limit_admin(&env, &caller)?;
+        Storage::set_creator_limit_override(&env, &creator, limit);
+        Ok(())
+    }
+
+    /// Admin-only: update the contract-wide default daily hunt-creation limit.
+    ///
+    /// This is the fallback used for any creator that has no per-creator
+    /// override. The initial value is [`rate_limit::DEFAULT_HUNT_CREATION_LIMIT`].
+    pub fn set_default_hunt_creation_limit(
+        env: Env,
+        caller: Address,
+        limit: u32,
+    ) -> Result<(), HuntErrorCode> {
+        rate_limit::RateLimiter::require_rate_limit_admin(&env, &caller)?;
+        Storage::set_default_hunt_creation_limit(&env, limit);
+        Ok(())
+    }
+
+    /// Query the current quota status for a creator.
+    ///
+    /// Returns how many hunts the creator has created today, their effective
+    /// daily limit, and the cooldown seconds until the next day begins (0 when
+    /// the limit has not been reached).
+    pub fn get_creator_rate_limit_status(
+        env: Env,
+        creator: Address,
+    ) -> crate::types::RateLimitStatus {
+        let now = env.ledger().timestamp();
+        rate_limit::RateLimiter::get_status(&env, &creator, now)
     }
 
     #[cfg(debug_assertions)]

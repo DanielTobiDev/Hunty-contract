@@ -197,7 +197,7 @@ impl Storage {
     /// Returns the namespaced persistent storage key for a creator's daily
     /// rate-limit counter. Using a tuple key keeps the counter from colliding
     /// with any other feature that keys persistent data by a bare `Address`.
-    pub fn rate_limit_key(env: &Env, creator: &Address) -> (soroban_sdk::Symbol, Address) {
+    pub fn rate_limit_key(_env: &Env, creator: &Address) -> (soroban_sdk::Symbol, Address) {
         (Self::RATE_LIMIT_KEY, creator.clone())
     }
 
@@ -1695,6 +1695,45 @@ impl Storage {
             })
     }
 
+    /// Returns up to `count` player addresses starting at `start_index` from
+    /// the persistent registration index for a hunt.
+    ///
+    /// Only the requested slice of the index is read, so paging callers never
+    /// have to load the whole player list (keeping them O(window) instead of
+    /// O(total registrations)). Out-of-range requests return an empty vector.
+    pub fn get_player_addresses_range(
+        env: &Env,
+        hunt_id: u64,
+        start_index: u32,
+        count: u32,
+    ) -> Vec<Address> {
+        let mut addrs = Vec::new(env);
+
+        if count == 0 {
+            return addrs;
+        }
+
+        let total = Self::get_player_count(env, hunt_id);
+
+        if start_index >= total {
+            return addrs;
+        }
+
+        let end = core::cmp::min(start_index.saturating_add(count), total);
+
+        for i in start_index..end {
+            let entry_key = Self::player_entry_key(hunt_id, i);
+
+            if let Some(addr) = env.storage().persistent().get::<_, Address>(&entry_key) {
+                Self::touch_persistent_index(env, &entry_key);
+
+                addrs.push_back(addr);
+            }
+        }
+
+        addrs
+    }
+
     pub fn get_player_addresses_for_hunt(env: &Env, hunt_id: u64) -> Vec<Address> {
         Self::migrate_player_index_from_instance(env, hunt_id);
 
@@ -1935,7 +1974,9 @@ impl Storage {
     pub fn increment_clue_attempt_count(env: &Env, hunt_id: u64, clue_id: u32, player: &Address) {
         let key = Self::clue_attempt_key(hunt_id, clue_id, player);
         let count = env.storage().persistent().get(&key).unwrap_or(0u32);
-        env.storage().persistent().set(&key, &count.saturating_add(1));
+        env.storage()
+            .persistent()
+            .set(&key, &count.saturating_add(1));
         extend_ttl(env, &key, TtlPolicy::Active);
     }
 
@@ -3154,11 +3195,13 @@ mod index_tier_tests {
             )
             .unwrap();
 
-            HuntyCore::activate_hunt(env.clone(), id, creator.clone()).unwrap();
-
-            HuntyCore::register_player(env.clone(), id, player.clone()).unwrap();
-
             id
+        });
+
+        env.as_contract(&contract_id, || {
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+
+            HuntyCore::register_player(env.clone(), hunt_id, player.clone()).unwrap();
         });
 
         (contract_id, hunt_id, player)
