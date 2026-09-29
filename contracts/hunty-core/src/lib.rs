@@ -963,7 +963,14 @@ impl HuntyCore {
     }
 
     /// Returns clue information for a hunt/clue. Does not expose the answer hash.
+    ///
+    /// Questions are only returned once the hunt is `Active` and the ledger
+    /// timestamp has reached `start_time` (when set). Before that, callers
+    /// receive [`HuntErrorCode::HuntNotActive`] so questions cannot be read
+    /// ahead of registration and solved offline to game time-based scoring
+    /// and reward tiers.
     pub fn get_clue(env: Env, hunt_id: u64, clue_id: u32) -> Result<ClueInfo, HuntErrorCode> {
+        Self::require_clues_visible(&env, hunt_id)?;
         let clue =
             Storage::get_clue_or_error(&env, hunt_id, clue_id).map_err(HuntErrorCode::from)?;
         Ok(ClueInfo {

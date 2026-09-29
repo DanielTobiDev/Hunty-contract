@@ -1661,6 +1661,8 @@ mod test {
 
             let ids = HuntyCore::add_clues(env.clone(), hunt_id, clues).unwrap();
             let hunt = Storage::get_hunt(env, hunt_id).unwrap();
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+            HuntyCore::register_player(env.clone(), hunt_id, Address::generate(env)).unwrap();
             let stored = HuntyCore::list_clues(env.clone(), hunt_id, 0, 10);
             (ids, hunt, stored)
         });
