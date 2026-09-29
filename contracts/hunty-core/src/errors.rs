@@ -1,7 +1,7 @@
-use soroban_sdk::contracterror;
+use soroban_contracterror;
 
 // NOTE: Soroban's #[contracterror] XDR spec caps error enums at 50 cases
-// (ScSpecUdtErrorEnumV0::cases is a VecM<_, 50>). This enum is already at
+// (ScSpecUdtErrorEnumV0::cases is a VecM, 50>). This enum is already at
 // that limit. If a new error code is ever needed, reuse a semantically-close
 // existing variant instead of adding one rather than removing or renumbering
 // an existing variant.
