@@ -1,5 +1,10 @@
 use soroban_sdk::{contracttype, Address, BytesN, Env, Map, String, Vec};
 
+/// Maximum number of co-creators allowed per hunt.
+/// Co-creator lists are stored in persistent storage (keyed per hunt) and
+/// capped to bound the cost of reading them on every call.
+pub const MAX_CO_CREATORS: u32 = 10;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[repr(u32)]

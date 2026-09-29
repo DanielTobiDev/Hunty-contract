@@ -65,6 +65,8 @@ const MAX_INVITE_CODE_LENGTH: usize = 256;
 const MAX_CATEGORY_BYTES: u32 = 64;
 const MAX_CATEGORIES_PER_HUNT: u32 = 5;
 const MAX_CLUES_PER_HUNT: u32 = 100;
+/// Maximum number of co-creators allowed per hunt.
+const MAX_CO_CREATORS_PER_HUNT: u32 = 10;
 /// Maximum number of leaderboard entries returned (gas and UX limit).
 const MAX_LEADERBOARD_SIZE: u32 = 20;
 /// Maximum number of player records scanned when building leaderboard responses.
@@ -3815,6 +3817,9 @@ impl HuntyCore {
         let hunt = Storage::get_hunt(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
         if hunt.creator != creator {
             return Err(HuntErrorCode::Unauthorized);
+        }
+        if Storage::get_co_creators(&env, hunt_id).len() >= MAX_CO_CREATORS_PER_HUNT {
+            return Err(HuntErrorCode::TooManyCoCreators);
         }
         Storage::add_co_creator(&env, hunt_id, &new_co_creator);
         Ok(())

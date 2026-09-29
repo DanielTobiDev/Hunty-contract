@@ -1,4 +1,5 @@
 use crate::storage::Storage;
+use crate::storage::MAX_CO_CREATORS;
 use hunty_migration::{
     MigrationFramework, UpgradeAuthError, UpgradeAuthorization, UpgradeExecutedEvent,
     UpgradeHistoryEntry, UpgradeProposal, UpgradeProposedEvent,
@@ -129,6 +130,12 @@ impl HuntyCoreMigration {
                         Self::migrate_v3_to_v4(env);
                     }
                     current = 4;
+                }
+                4 => {
+                    if !dry_run {
+                        Self::migrate_v4_to_v5(env);
+                    }
+                    current = 5;
                 }
                 _ => {
                     return Ok(MigrationFramework::build_report(
@@ -297,6 +304,35 @@ impl HuntyCoreMigration {
                 let clue = all_clues.get(i).unwrap();
                 Storage::save_clue(env, hunt_id, &clue);
             }
+        }
+    }
+
+    /// v4 -> v5: move co-creator lists from instance storage to persistent
+    /// storage and enforce the per-hunt co-creator cap. Legacy instance-storage
+    /// entries are read, truncated to `MAX_CO_CREATORS`, written to persistent
+    /// storage, and then removed from instance storage.
+    fn migrate_v4_to_v5(env: &Env) {
+        let hunt_count = Storage::get_hunt_counter(env);
+        for hunt_id in 1..=hunt_count {
+            if Storage::get_hunt(env, hunt_id).is_none() {
+                continue;
+            }
+            let legacy = Storage::get_co_creators_legacy(env, hunt_id);
+            if legacy.is_empty() {
+                continue;
+            }
+            let mut capped = soroban_sdk::Vec::new(env);
+            let limit = if legacy.len() > MAX_CO_CREATORS {
+                MAX_CO_CREATORS
+            } else {
+                legacy.len()
+            };
+            for i in 0..limit {
+                // SAFETY: i is in [0, limit) and limit <= legacy.len()
+                capped.push_back(legacy.get(i).unwrap());
+            }
+            Storage::set_co_creators(env, hunt_id, &capped);
+            Storage::remove_co_creators_legacy(env, hunt_id);
         }
     }
 }

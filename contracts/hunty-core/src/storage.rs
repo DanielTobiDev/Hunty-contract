@@ -33,6 +33,11 @@ const MAX_MIGRATED_CLUE_INDEX_ENTRIES: u32 = 100;
 
 pub(crate) const MAX_VIEW_ONLY_ENTRIES: u32 = 200;
 
+/// Maximum number of co-creators allowed per hunt. Keeps the co-creator list
+/// bounded so enumeration and membership checks stay within the invocation
+/// budget as the list grows.
+pub(crate) const MAX_CO_CREATORS: u32 = 20;
+
 #[contracttype]
 #[derive(Clone, Debug)]
 
@@ -165,6 +170,8 @@ impl Storage {
     const ADMIN_KEY: soroban_sdk::Symbol = symbol_short!("AD");
 
     const VIEW_ONLY_KEY: soroban_sdk::Symbol = symbol_short!("V");
+
+    const CO_CREATOR_KEY: soroban_sdk::Symbol = symbol_short!("COCRTR");
 
     const GLOBAL_VIEW_ONLY_KEY: soroban_sdk::Symbol = symbol_short!("GV");
 
