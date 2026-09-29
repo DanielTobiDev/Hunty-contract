@@ -1,361 +1,185 @@
 use soroban_sdk::contracterror;
 
 // NOTE: Soroban's #[contracterror] XDR spec caps error enums at 50 cases
-
-// (sSpecUdtErrorEnumV0::cases is a VecM, 50, >). This enum is already at
-
+// (ScSpecUdtErrorEnumV0::cases is a VecM_, 50>). This enum is already at
 // that limit. If a new error code is ever needed, reuse a semantically-close
-
 // existing variant instead of adding one rather than removing or renumbering
-
 // an existing variant.
-
 //
-
 // NAMESPACE: hunty-core error codes occupy the range 1001–1999.
-
-//   reward-manager uses 2001–1999 (see contracts/reward-manager/src/errors.rs).
-
+//   reward-manager uses 2001–2999 (see contracts/reward-manager/src/errors.rs).
 //   nft-reward      uses 3001–3999 (see contracts/nft-reward/src/errors.rs).
-
 // This guarantees that a numeric code read from a transaction envelope is
-
 // unambiguous regardless of which contract frame produced it.
-
 #[contracterror]
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
-
 #[repr(u32)]
-
 pub enum HuntErrorCode {
-
     HuntNotFound = 1,
-
     ClueNotFound = 2,
-
     InvalidHuntStatus = 3,
-
     PlayerNotRegistered = 4,
-
     ClueAlreadyCompleted = 5,
-
     InvalidAnswer = 6,
-
     HuntNotActive = 7,
-
     Unauthorized = 8,
-
     InsufficientRewardPool = 9,
-
     DuplicateRegistration = 10,
-
     InvalidTitle = 11,
-
     InvalidDescription = 12,
-
     InvalidAddress = 13,
-
     TooManyClues = 14,
-
     InvalidQuestion = 15,
-
     RefundFailed = 16,
-
     NoCluesAdded = 17,
-
     HuntNotCompleted = 18,
-
     RewardAlreadyClaimed = 19,
-
     RewardDistributionFailed = 20,
-
     NoRewardsConfigured = 21,
-
     DuplicateSubmission = 22,
-
     SubmissionExpired = 23,
-
     BannedPlayer = 24,
-
     NoRequiredClues = 25,
-
     RateLimitExceeded = 26,
-
     ScoreOverflow = 27,
-
     RegistrationsPaused = 28,
-
     AnswersPaused = 29,
-
     RewardsPaused = 30,
-
     HuntEndTimeInPast = 31,
-
     NoPendingAdmin = 32,
-
     PendingAdminMismatch = 33,
-
     InvalidRarity = 34,
-
     InvalidTimeBonusConfig = 35,
-
     AddressBlacklisted = 36,
-
     ContractPaused = 37,
-
     InvalidMaxAttempts = 38,
-
     InvalidWeight = 39,
-
     HintNotAvailable = 40,
-
     HintAlreadyUnlocked = 41,
-
     InsufficientScore = 42,
-
     TooManyCategories = 43,
-
     InvalidCategory = 44,
-
     InvalidDifficulty = 45,
-
     CorruptPlayerProgress = 46,
-
     HuntNotStarted = 47,
-
     AdminAlreadyProposed = 48,
-
     InvalidPoints = 49,
-
     HuntFull = 50,
-
     LeaderboardVisibilityUnauthorized = 51,
-
+    TooManyCoCreators = 52,
 }
 
 #[derive(Debug)]
-
 pub enum HuntError {
-
     HuntNotFound,
-
     ClueNotFound,
-
     InvalidHuntStatus,
-
     PlayerNotRegistered,
-
     ClueAlreadyCompleted,
-
     InvalidAnswer,
-
     HuntNotActive,
-
     Unauthorized,
-
     InsufficientRewardPool,
-
     DuplicateRegistration,
-
     InvalidTitle,
-
     InvalidDescription,
-
     InvalidAddress,
-
     TooManyClues,
-
     InvalidQuestion,
-
     RefundFailed,
-
     NoCluesAdded,
-
     HuntNotCompleted,
-
     RewardAlreadyClaimed,
-
     RewardDistributionFailed,
-
     NoRewardsConfigured,
-
     DuplicateSubmission,
-
     SubmissionExpired,
-
     BannedPlayer,
-
     NoRequiredClues,
-
     RateLimitExceeded,
-
     ScoreOverflow,
-
     RegistrationsPaused,
-
     AnswersPaused,
-
     RewardsPaused,
-
     HuntEndTimeInPast,
-
     NoPendingAdmin,
-
     PendingAdminMismatch,
-
     AdminAlreadyProposed,
-
     InvalidRarity,
-
     InvalidTimeBonusConfig,
-
     AddressBlacklisted,
-
     ContractPaused,
-
     InvalidMaxAttempts,
-
     InvalidSubmissionsPerMinute,
-
     InvalidWeight,
-
     HintNotAvailable,
-
     HintAlreadyUnlocked,
-
     InsufficientScore,
-
     TooManyCategories,
-
     InvalidCategory,
-
     InvalidDifficulty,
-
     CorruptPlayerProgress,
-
     HuntNotStarted,
-
     AttemptCooldownNotExpired,
-
     HuntFull,
-
     TooManyCoCreators,
-
 }
 
 impl From<HuntError> for HuntErrorCode {
-
     fn from(err: HuntError) -> Self {
-
         match err {
-
             HuntError::HuntNotFound => HuntErrorCode::HuntNotFound,
-
             HuntError::ClueNotFound => HuntErrorCode::ClueNotFound,
-
             HuntError::InvalidHuntStatus => HuntErrorCode::InvalidHuntStatus,
-
             HuntError::PlayerNotRegistered => HuntErrorCode::PlayerNotRegistered,
-
             HuntError::ClueAlreadyCompleted => HuntErrorCode::ClueAlreadyCompleted,
-
             HuntError::InvalidAnswer => HuntErrorCode::InvalidAnswer,
-
             HuntError::HuntNotActive => HuntErrorCode::HuntNotActive,
-
             HuntError::Unauthorized => HuntErrorCode::Unauthorized,
-
             HuntError::InsufficientRewardPool => HuntErrorCode::InsufficientRewardPool,
-
             HuntError::DuplicateRegistration => HuntErrorCode::DuplicateRegistration,
-
             HuntError::InvalidTitle => HuntErrorCode::InvalidTitle,
-
             HuntError::InvalidDescription => HuntErrorCode::InvalidDescription,
-
             HuntError::InvalidAddress => HuntErrorCode::InvalidAddress,
-
             HuntError::TooManyClues => HuntErrorCode::TooManyClues,
-
             HuntError::InvalidQuestion => HuntErrorCode::InvalidQuestion,
-
             HuntError::RefundFailed => HuntErrorCode::RefundFailed,
-
             HuntError::NoCluesAdded => HuntErrorCode::NoCluesAdded,
-
             HuntError::HuntNotCompleted => HuntErrorCode::HuntNotCompleted,
-
             HuntError::RewardAlreadyClaimed => HuntErrorCode::RewardAlreadyClaimed,
-
             HuntError::RewardDistributionFailed => HuntErrorCode::RewardDistributionFailed,
-
             HuntError::NoRewardsConfigured => HuntErrorCode::NoRewardsConfigured,
-
             HuntError::DuplicateSubmission => HuntErrorCode::DuplicateSubmission,
-
             HuntError::SubmissionExpired => HuntErrorCode::SubmissionExpired,
-
             HuntError::BannedPlayer => HuntErrorCode::BannedPlayer,
-
             HuntError::NoRequiredClues => HuntErrorCode::NoRequiredClues,
-
             HuntError::RateLimitExceeded => HuntErrorCode::RateLimitExceeded,
-
             HuntError::ScoreOverflow => HuntErrorCode::ScoreOverflow,
-
             HuntError::RegistrationsPaused => HuntErrorCode::RegistrationsPaused,
-
             HuntError::AnswersPaused => HuntErrorCode::AnswersPaused,
-
             HuntError::RewardsPaused => HuntErrorCode::RewardsPaused,
-
             HuntError::HuntEndTimeInPast => HuntErrorCode::HuntEndTimeInPast,
-
             HuntError::NoPendingAdmin => HuntErrorCode::NoPendingAdmin,
-
             HuntError::PendingAdminMismatch => HuntErrorCode::PendingAdminMismatch,
-
             HuntError::AdminAlreadyProposed => HuntErrorCode::AdminAlreadyProposed,
-
             HuntError::InvalidRarity => HuntErrorCode::InvalidRarity,
-
             HuntError::InvalidTimeBonusConfig => HuntErrorCode::InvalidTimeBonusConfig,
-
             HuntError::AddressBlacklisted => HuntErrorCode::AddressBlacklisted,
-
             HuntError::ContractPaused => HuntErrorCode::ContractPaused,
-
             HuntError::InvalidMaxAttempts => HuntErrorCode::InvalidMaxAttempts,
-
             HuntError::InvalidSubmissionsPerMinute => HuntErrorCode::InvalidMaxAttempts,
-
             HuntError::InvalidWeight => HuntErrorCode::InvalidWeight,
-
             HuntError::HintNotAvailable => HuntErrorCode::HintNotAvailable,
-
             HuntError::HintAlreadyUnlocked => HuntErrorCode::HintAlreadyUnlocked,
-
             HuntError::InsufficientScore => HuntErrorCode::InsufficientScore,
-
             HuntError::TooManyCategories => HuntErrorCode::TooManyCategories,
-
             HuntError::InvalidCategory => HuntErrorCode::InvalidCategory,
-
             HuntError::InvalidDifficulty => HuntErrorCode::InvalidDifficulty,
-
             HuntError::CorruptPlayerProgress => HuntErrorCode::CorruptPlayerProgress,
-
             HuntError::HuntNotStarted => HuntErrorCode::HuntNotStarted,
-
             HuntError::AttemptCooldownNotExpired => HuntErrorCode::RateLimitExceeded,
-
             HuntError::HuntFull => HuntErrorCode::HuntFull,
-
             HuntError::TooManyCoCreators => HuntErrorCode::TooManyCoCreators,
-
         }
-
     }
-
 }
