@@ -1150,11 +1150,14 @@ impl HuntyCore {
                     MAX_QUESTION_LENGTH,
                     false,
                 )
-                .map_err(|_| HuntErrorCode::InvalidQuestion)?,
+                .map_err(|_| HuntErrorCode::InvalidHint)?,
             ),
             None => None,
         };
         clue.hint_penalty_points = if clue.hint.is_some() {
+            if hint_penalty_points > clue.points {
+                return Err(HuntErrorCode::InvalidHint);
+            }
             hint_penalty_points
         } else {
             0

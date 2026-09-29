@@ -1,7 +1,7 @@
 use soroban_sdk::contracterror;
 
 // NOTE: Soroban's #[contracterror] XDR spec caps error enums at 50 cases
-// (ScSpecUdtErrorEnumV0::cases is a VecM_, 50>). This enum is already at
+// (ScSpecUdtErrorEnumV0::cases is a VecM<_, 50>). This enum is already at
 // that limit. If a new error code is ever needed, reuse a semantically-close
 // existing variant instead of adding one rather than removing or renumbering
 // an existing variant.
@@ -66,6 +66,7 @@ pub enum HuntErrorCode {
     InvalidPoints = 49,
     HuntFull = 50,
     LeaderboardVisibilityUnauthorized = 51,
+    InvalidHint = 52,
 }
 
 #[derive(Debug)]
@@ -121,6 +122,7 @@ pub enum HuntError {
     HuntNotStarted,
     AttemptCooldownNotExpired,
     HuntFull,
+    InvalidHint,
 }
 
 impl From<HuntError> for HuntErrorCode {
@@ -177,6 +179,7 @@ impl From<HuntError> for HuntErrorCode {
             HuntError::HuntNotStarted => HuntErrorCode::HuntNotStarted,
             HuntError::AttemptCooldownNotExpired => HuntErrorCode::RateLimitExceeded,
             HuntError::HuntFull => HuntErrorCode::HuntFull,
+            HuntError::InvalidHint => HuntErrorCode::InvalidHint,
         }
     }
 }
