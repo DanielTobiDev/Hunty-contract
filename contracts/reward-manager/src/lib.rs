@@ -521,7 +521,7 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
-        Err(RewardErrorCode::Unauthorized)
+        Ok(())
     }
 
     /// Adds a contract to the authorized callers list for `distribute_rewards`.
