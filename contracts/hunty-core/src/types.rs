@@ -566,6 +566,14 @@ pub struct HuntStatusChangedEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HuntPrivacyChangedEvent {
+    pub hunt_id: u64,
+    pub is_private: bool,
+    pub changed_at: u64,
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct ClueCompletedEvent {
     pub hunt_id: u64,
@@ -893,4 +901,40 @@ pub struct PartialScoreClaimedEvent {
     pub player: Address,
     pub partial_score: u32,
     pub clues_completed: u32,
+}
+
+/// Emitted when a co-creator is added to a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CoCreatorAddedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub co_creator: Address,
+}
+
+/// Emitted when a co-creator is removed from a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CoCreatorRemovedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub co_creator: Address,
+}
+
+/// Emitted when view-only access is granted to an address for a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ViewOnlyAccessGrantedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub viewer: Address,
+}
+
+/// Emitted when view-only access is revoked from an address for a hunt.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ViewOnlyAccessRevokedEvent {
+    pub hunt_id: u64,
+    pub actor: Address,
+    pub viewer: Address,
 }
