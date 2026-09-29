@@ -141,17 +141,11 @@ pub struct Clue {
     pub hint_penalty_points: u32,
 }
 
-/// Returns true when clue questions may be disclosed to `caller`.
-///
-/// Questions are only public once the hunt has started (or been activated) and
-/// the caller is registered. This prevents players from reading every question
-/// before registering, solving offline, and then submitting all answers within
-/// seconds to game time-based scoring and reward tiers.
-pub fn clue_questions_visible(hunt: &Hunt, caller_registered: bool, current_time: u64) -> bool {
-    let started = hunt.activated_at != 0
-        || (hunt.start_time != 0 && current_time >= hunt.start_time);
-    started && caller_registered
-}
+/// Sentinel value used by `ClueInfo` when the caller is not yet allowed to
+/// see the clue question (unregistered caller, or hunt not yet started).
+/// The question field is replaced with this marker so that clients can
+/// distinguish a redacted clue from a genuinely empty question.
+pub const REDACTED_QUESTION: &str = "[locked]";
 
 /// Input payload for adding multiple clues in one contract invocation.
 #[contracttype]
@@ -178,6 +172,14 @@ pub struct ClueInfo {
     pub weight: u32,
     pub hint_available: bool,
     pub hint_penalty_points: u32,
+}
+
+impl ClueInfo {
+    /// Returns true when the question has been redacted because the caller
+    /// is not yet entitled to view it (see `get_clue`/`list_clues`).
+    pub fn is_question_redacted(&self) -> bool {
+        self.question == String::from_str(&Env::default(), REDACTED_QUESTION)
+    }
 }
 
 #[contracttype]

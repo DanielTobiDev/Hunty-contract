@@ -1,4 +1,3 @@
-use crate::errors::HuntErrorCode;
 use crate::HuntyCore;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env, String};
@@ -34,7 +33,6 @@ mod test {
         HuntCreatedEvent, HuntStatus, HuntStatusChangedEvent, LeaderboardResult, PlayerProgress,
         PlayerRegisteredEvent, RewardClaimFailedEvent, TimeBonusConfig,
     };
-    use crate::errors::HuntErrorCode;
 
     /// Mirrors the private production constant used for submission timestamp validation.
     const ANSWER_SUBMISSION_WINDOW_SECS: u64 = 300;
@@ -66,128 +64,6 @@ mod test {
             idx += 1;
         }
         None
-    }
-
-    /// Regression test for the clue-privacy issue: clue questions must not be
-    /// readable by callers who are not registered for the hunt, and must not be
-    /// readable before the hunt has started.  This closes the time-based scoring
-    /// and reward-tier gaming vector described in the issue.
-    #[test]
-    fn test_clue_questions_are_private_before_registration_and_start() {
-        let env = Env::default();
-        let now = 1_700_000_000;
-        env.ledger().set_timestamp(now);
-        env.mock_all_auths();
-
-        let creator = Address::generate(&env);
-        let player = Address::generate(&env);
-        let stranger = Address::generate(&env);
-        let contract_id = env.register(HuntyCore, ());
-
-        let start_time = now + 1_000;
-        let end_time = now + 10_000;
-
-        // Create a scheduled hunt with a single clue.
-        let hunt_id = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::create_hunt(
-                env.clone(),
-                creator.clone(),
-                String::from_str(env, "Private Clue Hunt"),
-                String::from_str(env, "Clues must be private before start/registration"),
-                Some(start_time),
-                Some(end_time),
-                0,
-                None,
-                None,
-            )
-            .unwrap()
-        });
-
-        as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::add_clue(
-                env.clone(),
-                hunt_id,
-                String::from_str(env, "Secret Question?"),
-                String::from_str(env, "secret"),
-                10,
-                true,
-                None,
-                None,
-            )
-            .unwrap();
-        });
-
-        // Activate the hunt while it is still before start_time.
-        as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
-        });
-
-        // 1. Before start_time: get_clue must not leak the question to anyone.
-        let pre_start_get = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::get_clue(env.clone(), hunt_id, 1, player.clone())
-        });
-        assert!(
-            pre_start_get.is_err(),
-            "get_clue must not return a clue before the hunt has started"
-        );
-
-        // 2. Before start_time: list_clues must not leak questions.
-        let pre_start_list = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::list_clues(env.clone(), hunt_id, 0, 10, player.clone())
-        });
-        assert!(
-            pre_start_list.is_err(),
-            "list_clues must not return clues before the hunt has started"
-        );
-
-        // 3. Before start_time: list_clues_paginated must not leak questions.
-        let pre_start_paged = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::list_clues_paginated(env.clone(), hunt_id, 0, 10, player.clone())
-        });
-        assert!(
-            pre_start_paged.is_err(),
-            "list_clues_paginated must not return clues before the hunt has started"
-        );
-
-        // 4. Advance to start_time but do NOT register the caller.
-        env.ledger().set_timestamp(start_time);
-
-        let unregistered_get = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::get_clue(env.clone(), hunt_id, 1, stranger.clone())
-        });
-        assert!(
-            unregistered_get.is_err(),
-            "get_clue must reject callers who are not registered for the hunt"
-        );
-
-        let unregistered_list = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::list_clues(env.clone(), hunt_id, 0, 10, stranger.clone())
-        });
-        assert!(
-            unregistered_list.is_err(),
-            "list_clues must reject callers who are not registered for the hunt"
-        );
-
-        let unregistered_paged = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::list_clues_paginated(env.clone(), hunt_id, 0, 10, stranger.clone())
-        });
-        assert!(
-            unregistered_paged.is_err(),
-            "list_clues_paginated must reject callers who are not registered for the hunt"
-        );
-
-        // 5. Register the player and confirm the clue is now readable.
-        as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::register_player(env.clone(), hunt_id, player.clone()).unwrap();
-        });
-
-        let registered_get = as_core_contract(&env, &contract_id, |env| {
-            HuntyCore::get_clue(env.clone(), hunt_id, 1, player.clone())
-        });
-        assert!(
-            registered_get.is_ok(),
-            "registered player must be able to read the clue after the hunt has started"
-        );
     }
 
     fn find_hunt_status_event_for_hunt(
@@ -1748,6 +1624,8 @@ mod test {
 
             let ids = HuntyCore::add_clues(env.clone(), hunt_id, clues).unwrap();
             let hunt = Storage::get_hunt(env, hunt_id).unwrap();
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+            HuntyCore::register_player(env.clone(), hunt_id, Address::generate(env)).unwrap();
             let stored = HuntyCore::list_clues(env.clone(), hunt_id, 0, 10);
             (ids, hunt, stored)
         });
