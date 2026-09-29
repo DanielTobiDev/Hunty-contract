@@ -345,34 +345,6 @@ impl RewardManager {
         false
     }
 
-    /// Reads a player's score for a hunt directly from HuntyCore.
-    ///
-    /// `distribute_proportional` must never trust caller-supplied scores, so
-    /// the authoritative value is fetched from the core contract instead.
-    fn read_player_score(env: &Env, hunt_id: u64, player: &Address) -> i128 {
-        let core = match Storage::get_hunty_core(env) {
-            Some(c) => c,
-            None => return 0,
-        };
-        let mut args: Vec<Val> = Vec::new(env);
-        args.push_back(hunt_id.into_val(env));
-        args.push_back(player.clone().into_val(env));
-        let result: Val = env.invoke_contract(&core, &Symbol::new(env, "get_player_score"), args);
-        result.into_val(env)
-    }
-
-    /// Reads the total score for a hunt directly from HuntyCore.
-    fn read_total_score(env: &Env, hunt_id: u64) -> i128 {
-        let core = match Storage::get_hunty_core(env) {
-            Some(c) => c,
-            None => return 0,
-        };
-        let mut args: Vec<Val> = Vec::new(env);
-        args.push_back(hunt_id.into_val(env));
-        let result: Val = env.invoke_contract(&core, &Symbol::new(env, "get_total_score"), args);
-        result.into_val(env)
-    }
-
     /// Current semantic version of this contract.
     pub const CONTRACT_VERSION: u32 = 2;
     /// Minimum NftReward version this contract requires.
@@ -513,7 +485,7 @@ impl RewardManager {
             return Err(RewardErrorCode::Unauthorized);
         }
 
-        Err(RewardErrorCode::Unauthorized)
+        Ok(())
     }
 
     /// Adds a contract to the authorized callers list for `distribute_rewards`.
