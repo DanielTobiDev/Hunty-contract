@@ -3887,6 +3887,17 @@ impl HuntyCore {
         }
 
         Storage::add_view_only(&env, hunt_id, &viewer)?;
+
+        let event = ViewOnlyAccessGrantedEvent {
+            hunt_id,
+            actor: creator.clone(),
+            viewer: viewer.clone(),
+        };
+        env.events().publish(
+            (Symbol::new(&env, "ViewOnlyAccessGranted"), hunt_id),
+            event,
+        );
+
         Ok(())
     }
 
@@ -3905,6 +3916,17 @@ impl HuntyCore {
         }
 
         Storage::remove_view_only(&env, hunt_id, &viewer);
+
+        let event = ViewOnlyAccessRevokedEvent {
+            hunt_id,
+            actor: creator.clone(),
+            viewer: viewer.clone(),
+        };
+        env.events().publish(
+            (Symbol::new(&env, "ViewOnlyAccessRevoked"), hunt_id),
+            event,
+        );
+
         Ok(())
     }
 
@@ -3928,6 +3950,17 @@ impl HuntyCore {
             return Err(HuntErrorCode::Unauthorized);
         }
         Storage::add_co_creator(&env, hunt_id, &new_co_creator);
+
+        let event = CoCreatorAddedEvent {
+            hunt_id,
+            actor: creator.clone(),
+            co_creator: new_co_creator.clone(),
+        };
+        env.events().publish(
+            (Symbol::new(&env, "CoCreatorAdded"), hunt_id),
+            event,
+        );
+
         Ok(())
     }
 
@@ -3943,6 +3976,17 @@ impl HuntyCore {
             return Err(HuntErrorCode::Unauthorized);
         }
         Storage::remove_co_creator(&env, hunt_id, &co_creator_to_remove);
+
+        let event = CoCreatorRemovedEvent {
+            hunt_id,
+            actor: creator.clone(),
+            co_creator: co_creator_to_remove.clone(),
+        };
+        env.events().publish(
+            (Symbol::new(&env, "CoCreatorRemoved"), hunt_id),
+            event,
+        );
+
         Ok(())
     }
 
