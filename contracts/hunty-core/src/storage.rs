@@ -33,6 +33,11 @@ const MAX_MIGRATED_CLUE_INDEX_ENTRIES: u32 = 100;
 
 pub(crate) const MAX_VIEW_ONLY_ENTRIES: u32 = 200;
 
+/// Maximum number of co-creators per hunt. Keeps the co-creator list bounded
+/// so `get_co_creators` and `is_authorized_creator_or_co_creator` stay within
+/// the invocation budget as the list grows.
+pub(crate) const MAX_CO_CREATORS: u32 = 200;
+
 #[contracttype]
 #[derive(Clone, Debug)]
 
@@ -2728,38 +2733,73 @@ impl Storage {
 
     // ========== Co-Creators Storage Functions ==========
 
-    pub fn get_co_creators(env: &Env, hunt_id: u64) -> Vec<Address> {
-        let key = (symbol_short!("COCRTR"), hunt_id);
-
-        env.storage()
-            .instance()
-            .get(&key)
-            .unwrap_or_else(|| Vec::new(env))
+    fn co_creators_key(hunt_id: u64) -> (soroban_sdk::Symbol, u64) {
+        (symbol_short!("COCRTR"), hunt_id)
     }
 
-    pub fn add_co_creator(env: &Env, hunt_id: u64, address: &Address) {
-        let key = (symbol_short!("COCRTR"), hunt_id);
+    pub fn get_co_creators(env: &Env, hunt_id: u64) -> Vec<Address> {
+        let key = Self::co_creators_key(hunt_id);
+
+        let persistent: Option<Vec<Address>> = env.storage().persistent().get(&key);
+
+        if let Some(list) = persistent {
+            extend_ttl(env, &key, TtlPolicy::Active);
+
+            env.storage().instance().remove(&key);
+
+            return list;
+        }
+
+        // Legacy deployments kept the co-creator list in instance storage.
+        // Promote it on first read so upgrades preserve existing co-creators.
+        if let Some(list) = env.storage().instance().get::<_, Vec<Address>>(&key) {
+            env.storage().persistent().set(&key, &list);
+
+            env.storage().instance().remove(&key);
+
+            extend_ttl(env, &key, TtlPolicy::Active);
+
+            return list;
+        }
+
+        Vec::new(env)
+    }
+
+    pub fn add_co_creator(
+        env: &Env,
+        hunt_id: u64,
+        address: &Address,
+    ) -> Result<(), crate::errors::HuntError> {
+        let key = Self::co_creators_key(hunt_id);
 
         let mut list = Self::get_co_creators(env, hunt_id);
 
         if list.first_index_of(address).is_none() {
+            if list.len() >= MAX_CO_CREATORS {
+                return Err(crate::errors::HuntError::HuntFull);
+            }
+
             list.push_back(address.clone());
 
-            env.storage().instance().set(&key, &list);
+            env.storage().persistent().set(&key, &list);
 
-            env.storage().instance().extend_ttl(518400, 518400);
+            extend_ttl(env, &key, TtlPolicy::Active);
         }
+
+        Ok(())
     }
 
     pub fn remove_co_creator(env: &Env, hunt_id: u64, address: &Address) {
-        let key = (symbol_short!("COCRTR"), hunt_id);
+        let key = Self::co_creators_key(hunt_id);
 
         let mut list = Self::get_co_creators(env, hunt_id);
 
         if let Some(idx) = list.first_index_of(address) {
             list.remove(idx);
 
-            env.storage().instance().set(&key, &list);
+            env.storage().persistent().set(&key, &list);
+
+            extend_ttl(env, &key, TtlPolicy::Active);
         }
     }
 

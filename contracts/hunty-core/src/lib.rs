@@ -93,6 +93,9 @@ pub(crate) const MIN_HUNT_DURATION: u64 = 3600;
 /// Maximum number of members allowed in a team.
 #[allow(dead_code)]
 const MAX_TEAM_SIZE: u32 = 10;
+/// Maximum number of co-creators allowed per hunt. Mirrors the view-only
+/// list cap so a creator cannot grow the co-creator set without bound.
+const MAX_CO_CREATORS_PER_HUNT: u32 = 50;
 /// Minimum points a clue can be worth.
 pub(crate) const MIN_CLUE_POINTS: u32 = 1;
 /// Maximum points a clue can be worth. A clue above this cap multiplies into
@@ -3955,6 +3958,9 @@ impl HuntyCore {
         let hunt = Storage::get_hunt(&env, hunt_id).ok_or(HuntErrorCode::HuntNotFound)?;
         if hunt.creator != creator {
             return Err(HuntErrorCode::Unauthorized);
+        }
+        if Storage::get_co_creators(&env, hunt_id).len() >= MAX_CO_CREATORS_PER_HUNT {
+            return Err(HuntErrorCode::TooManyCoCreators);
         }
         Storage::add_co_creator(&env, hunt_id, &new_co_creator);
 
