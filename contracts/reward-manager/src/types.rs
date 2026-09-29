@@ -34,10 +34,10 @@ pub struct DistributionProof {
 }
 
 /// Resolution outcome for a manually resolved failed distribution.
-/// 
+///
 /// This enum tracks the final status of distributions that failed during
 /// their initial execution and were later resolved by an administrator.
-/// 
+///
 /// Related to issue #364: stuck-distribution resolution flow.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,6 +146,11 @@ pub struct RewardPoolConfig {
     /// Optional exact-rank reward tiers. A matching frozen completion rank
     /// takes precedence over flat and time-based amounts.
     pub rank_based_tiers: Vec<RankRewardTier>,
+    /// Address that most recently froze this pool, or `None` when the pool is
+    /// not frozen. Tracks whether the current freeze was issued by the pool
+    /// creator or the contract admin so that an admin-issued freeze can only be
+    /// lifted by the admin (#1077).
+    pub frozen_by: Option<Address>,
 }
 
 /// Full status of a reward pool, returned by get_reward_pool().
@@ -164,6 +169,9 @@ pub struct RewardPoolStatus {
     pub min_distribution_amount: i128,
     /// Whether distributions from this pool are temporarily frozen.
     pub frozen: bool,
+    /// Address that most recently froze this pool, or `None` when not frozen.
+    /// See `RewardPoolConfig::frozen_by` (#1077).
+    pub frozen_by: Option<Address>,
 }
 
 /// Pending NFT mint that failed and can be retried by the admin.
