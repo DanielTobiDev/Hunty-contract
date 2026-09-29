@@ -1073,6 +1073,52 @@ impl Storage {
         progress_list
     }
 
+    /// Returns up to `limit` completed, unclaimed player progress records for a
+    /// hunt, sourced from the leaderboard index instead of the full player
+    /// registration list.
+    ///
+    /// The leaderboard index only contains players who have completed the hunt,
+    /// so this avoids loading progress for every registered player. Callers
+    /// that need to select winners (e.g. `close_hunt`) should use this instead
+    /// of [`Self::get_hunt_players`] to stay within the invocation budget.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `hunt_id` - The hunt to get completed players for
+    /// * `limit` - Maximum number of entries to return (0 means no limit)
+    ///
+    /// # Returns
+    /// A Vec of completed, unclaimed PlayerProgress entries, capped at `limit`.
+    pub fn get_completed_hunt_players(
+        env: &Env,
+        hunt_id: u64,
+        limit: u32,
+    ) -> Vec<PlayerProgress> {
+        let entries = Self::get_leaderboard_index(env, hunt_id);
+
+        let mut progress_list = Vec::new(env);
+
+        let cap = if limit == 0 {
+            entries.len()
+        } else {
+            core::cmp::min(limit, entries.len())
+        };
+
+        for i in 0..cap {
+            if let Some(entry) = entries.get(i) {
+                if let Some(progress) =
+                    Self::get_player_progress(env, hunt_id, &entry.player)
+                {
+                    if progress.is_completed && !progress.reward_claimed {
+                        progress_list.push_back(progress);
+                    }
+                }
+            }
+        }
+
+        progress_list
+    }
+
     pub fn save_leaderboard_index(env: &Env, hunt_id: u64, entries: &Vec<LeaderboardIndexEntry>) {
         let key = Self::leaderboard_key(hunt_id);
 

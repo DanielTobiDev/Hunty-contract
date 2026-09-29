@@ -1640,17 +1640,29 @@ impl HuntyCore {
         // Completion rank is frozen, so iteration order cannot change which
         // player receives a rank-based amount. Lower-ranked completions are
         // skipped rather than consuming winner slots.
-        let players = Storage::get_hunt_players(&env, hunt_id);
+        //
+        // Iterate only completed players via the leaderboard index instead of
+        // loading every registered player's full progress record. The index is
+        // bounded by MAX_LEADERBOARD_SIZE, so this stays within the invocation
+        // budget even for hunts with many registrants.
+        let index_entries = Storage::get_leaderboard_index(&env, hunt_id);
         let mut rewarded_players = 0u32;
-        for i in 0..players.len() {
+        for i in 0..index_entries.len() {
             if hunt.reward_config.claimed_count >= hunt.reward_config.max_winners {
                 break;
             }
 
             // SAFETY: i is within the vector bounds established by the enclosing loop
-            let mut progress = players.get(i).unwrap();
-            if progress.is_completed
-                && !progress.reward_claimed
+            let entry = index_entries.get(i).unwrap();
+            if !entry.is_completed {
+                continue;
+            }
+            let mut progress =
+                match Storage::get_player_progress(&env, hunt_id, &entry.player) {
+                    Some(progress) => progress,
+                    None => continue,
+                };
+            if !progress.reward_claimed
                 && progress.completion_rank > 0
                 && progress.completion_rank <= hunt.reward_config.max_winners
             {
