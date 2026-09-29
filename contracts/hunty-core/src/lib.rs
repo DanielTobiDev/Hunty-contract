@@ -1680,9 +1680,10 @@ impl HuntyCore {
             return Err(HuntErrorCode::Unauthorized);
         }
 
-        // Cancellation is only valid from Draft, Active, or Paused. Terminal
-        // states (Completed, Cancelled, Archived, EmergencyStopped) must not
-        // be moved back to Cancelled, which would re-run the refund flow.
+        // Cancellation is only valid from a non-terminal, pre-completion state.
+        // Archived and EmergencyStopped are terminal: cancelling them would
+        // re-run the refund flow and emit a status change away from a terminal
+        // state.
         if cache.status != HuntStatus::Draft
             && cache.status != HuntStatus::Active
             && cache.status != HuntStatus::Paused
