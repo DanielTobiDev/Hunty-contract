@@ -316,6 +316,100 @@ mod test {
     }
 
     #[test]
+    fn test_cancel_hunt_rejects_archived_hunt() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_700_000_000);
+        let creator = Address::generate(&env);
+        let contract_id = env.register(HuntyCore, ());
+
+        env.mock_all_auths();
+        let hunt_id = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::create_hunt(
+                env.clone(),
+                creator.clone(),
+                String::from_str(env, "Archived Cancel Hunt"),
+                String::from_str(env, "Archived hunts must not be cancellable"),
+                None,
+                None,
+                1,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+
+        env.mock_all_auths();
+        as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::add_clue(
+                env.clone(),
+                hunt_id,
+                String::from_str(env, "Question 1?"),
+                String::from_str(env, "correct1"),
+                10,
+                true,
+                None,
+                None,
+            )
+            .unwrap();
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+            HuntyCore::archive_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+        });
+
+        env.mock_all_auths();
+        let result = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::cancel_hunt(env.clone(), hunt_id, creator.clone())
+        });
+        assert_eq!(result, Err(HuntErrorCode::InvalidHuntStatus));
+    }
+
+    #[test]
+    fn test_cancel_hunt_rejects_emergency_stopped_hunt() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_700_000_000);
+        let creator = Address::generate(&env);
+        let contract_id = env.register(HuntyCore, ());
+
+        env.mock_all_auths();
+        let hunt_id = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::create_hunt(
+                env.clone(),
+                creator.clone(),
+                String::from_str(env, "Emergency Stopped Cancel Hunt"),
+                String::from_str(env, "EmergencyStopped hunts must not be cancellable"),
+                None,
+                None,
+                1,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+
+        env.mock_all_auths();
+        as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::add_clue(
+                env.clone(),
+                hunt_id,
+                String::from_str(env, "Question 1?"),
+                String::from_str(env, "correct1"),
+                10,
+                true,
+                None,
+                None,
+            )
+            .unwrap();
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+            HuntyCore::emergency_stop_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+        });
+
+        env.mock_all_auths();
+        let result = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::cancel_hunt(env.clone(), hunt_id, creator.clone())
+        });
+        assert_eq!(result, Err(HuntErrorCode::InvalidHuntStatus));
+    }
+
+    #[test]
     fn test_all_error_codes_are_unique() {
         let mut seen = std::collections::BTreeSet::new();
         let variants: &[(HuntErrorCode, &str)] = &[
