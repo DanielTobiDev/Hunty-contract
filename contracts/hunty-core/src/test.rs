@@ -12376,6 +12376,129 @@ mod test {
             "retry with same nonce after ClueNotFound must succeed, got: {:?}", ok);
     }
 
+    // ── cancel_hunt terminal-state tests (Closes #cancel-archived-emergency) ──
+
+    /// cancel_hunt must reject an Archived hunt (terminal) and must not emit a
+    /// HuntStatusChanged event or run the refund flow again.
+    #[test]
+    fn test_cancel_hunt_rejects_archived_hunt() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_700_000_000);
+        env.mock_all_auths();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(HuntyCore, ());
+
+        let hunt_id = as_core_contract(&env, &contract_id, |env| {
+            let hid = HuntyCore::create_hunt(
+                env.clone(),
+                creator.clone(),
+                String::from_str(env, "Archived Hunt"),
+                String::from_str(env, "Desc"),
+                None,
+                None,
+                0,
+                None,
+                None,
+            )
+            .unwrap();
+            let mut hunt = Storage::get_hunt(env, hid).unwrap();
+            hunt.status = HuntStatus::Archived;
+            Storage::save_hunt(env, &hunt);
+            hid
+        });
+
+        let res = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::cancel_hunt(env.clone(), hunt_id, creator.clone())
+        });
+        assert_eq!(res, Err(HuntErrorCode::InvalidHuntStatus));
+
+        // Status must remain Archived and no status-change event emitted.
+        as_core_contract(&env, &contract_id, |env| {
+            let hunt = Storage::get_hunt(env, hunt_id).unwrap();
+            assert_eq!(hunt.status, HuntStatus::Archived);
+        });
+        assert!(
+            find_hunt_status_event_for_hunt(&env, hunt_id, HuntStatus::Cancelled).is_none(),
+            "Archived hunt must not emit a Cancelled status change"
+        );
+    }
+
+    /// cancel_hunt must reject an EmergencyStopped hunt and must not emit a
+    /// HuntStatusChanged event or run the refund flow again.
+    #[test]
+    fn test_cancel_hunt_rejects_emergency_stopped_hunt() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_700_000_000);
+        env.mock_all_auths();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(HuntyCore, ());
+
+        let hunt_id = as_core_contract(&env, &contract_id, |env| {
+            let hid = HuntyCore::create_hunt(
+                env.clone(),
+                creator.clone(),
+                String::from_str(env, "Emergency Hunt"),
+                String::from_str(env, "Desc"),
+                None,
+                None,
+                0,
+                None,
+                None,
+            )
+            .unwrap();
+            let mut hunt = Storage::get_hunt(env, hid).unwrap();
+            hunt.status = HuntStatus::EmergencyStopped;
+            Storage::save_hunt(env, &hunt);
+            hid
+        });
+
+        let res = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::cancel_hunt(env.clone(), hunt_id, creator.clone())
+        });
+        assert_eq!(res, Err(HuntErrorCode::InvalidHuntStatus));
+
+        // Status must remain EmergencyStopped and no status-change event emitted.
+        as_core_contract(&env, &contract_id, |env| {
+            let hunt = Storage::get_hunt(env, hunt_id).unwrap();
+            assert_eq!(hunt.status, HuntStatus::EmergencyStopped);
+        });
+        assert!(
+            find_hunt_status_event_for_hunt(&env, hunt_id, HuntStatus::Cancelled).is_none(),
+            "EmergencyStopped hunt must not emit a Cancelled status change"
+        );
+    }
+
+    /// cancel_hunt must still succeed from Draft (allowed non-terminal state).
+    #[test]
+    fn test_cancel_hunt_allows_draft_hunt() {
+        let env = Env::default();
+        env.ledger().set_timestamp(1_700_000_000);
+        env.mock_all_auths();
+        let creator = Address::generate(&env);
+        let contract_id = env.register(HuntyCore, ());
+
+        let hunt_id = as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::create_hunt(
+                env.clone(),
+                creator.clone(),
+                String::from_str(env, "Draft Hunt"),
+                String::from_str(env, "Desc"),
+                None,
+                None,
+                0,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+
+        as_core_contract(&env, &contract_id, |env| {
+            HuntyCore::cancel_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+            let hunt = Storage::get_hunt(env, hunt_id).unwrap();
+            assert_eq!(hunt.status, HuntStatus::Cancelled);
+        });
+    }
+
     // ── create_hunt auth tests (Closes #789) ────────────────────────────────
 
     /// create_hunt must reject calls that do not carry the creator's authorization.

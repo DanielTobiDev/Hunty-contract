@@ -1741,11 +1741,14 @@ impl HuntyCore {
             return Err(HuntErrorCode::Unauthorized);
         }
 
-        // Cannot cancel a completed or already-cancelled hunt
-        if cache.status == HuntStatus::Completed {
-            return Err(HuntErrorCode::InvalidHuntStatus);
-        }
-        if cache.status == HuntStatus::Cancelled {
+        // Cancellation is only valid from a non-terminal, pre-completion state.
+        // Archived and EmergencyStopped are terminal: cancelling them would
+        // re-run the refund flow and emit a status change away from a terminal
+        // state.
+        if cache.status != HuntStatus::Draft
+            && cache.status != HuntStatus::Active
+            && cache.status != HuntStatus::Paused
+        {
             return Err(HuntErrorCode::InvalidHuntStatus);
         }
 
