@@ -192,6 +192,48 @@ impl Storage {
 
     const TEAM_PROGRESS_KEY: soroban_sdk::Symbol = symbol_short!("TMPR");
 
+    const RATE_LIMIT_KEY: soroban_sdk::Symbol = symbol_short!("HRATE");
+
+    /// Returns the namespaced persistent storage key for a creator's daily
+    /// rate-limit counter. Using a tuple key keeps the counter from colliding
+    /// with any other feature that keys persistent data by a bare `Address`.
+    pub fn rate_limit_key(_env: &Env, creator: &Address) -> (soroban_sdk::Symbol, Address) {
+        (Self::RATE_LIMIT_KEY, creator.clone())
+    }
+
+    /// Reads the creator's daily rate-limit counter, migrating a legacy entry
+    /// stored under the bare `Address` key if one exists.
+    pub fn get_rate_limit(env: &Env, creator: &Address) -> Option<CreatorDailyHuntCount> {
+        let key = Self::rate_limit_key(env, creator);
+
+        if let Some(value) = env.storage().persistent().get(&key) {
+            return Some(value);
+        }
+
+        // Migrate a legacy entry stored under the bare creator Address.
+        if let Some(legacy) = env.storage().persistent().get(creator) {
+            env.storage().persistent().set(&key, &legacy);
+
+            env.storage().persistent().remove(creator);
+
+            extend_ttl(env, &key, TtlPolicy::Default);
+
+            return Some(legacy);
+        }
+
+        None
+    }
+
+    /// Persists the creator's daily rate-limit counter under the namespaced
+    /// key and extends its TTL so the entry cannot expire mid-day.
+    pub fn set_rate_limit(env: &Env, creator: &Address, value: &CreatorDailyHuntCount) {
+        let key = Self::rate_limit_key(env, creator);
+
+        env.storage().persistent().set(&key, value);
+
+        extend_ttl(env, &key, TtlPolicy::Default);
+    }
+
     // Pause functions (granular: registrations, answers, rewards)
 
     pub fn set_pause_registrations(env: &Env, paused: bool) {
@@ -849,16 +891,11 @@ impl Storage {
 
     /// * `progress` - The PlayerProgress struct to store
 
-    pub fn save_player_progress(env: &Env, progress: &PlayerProgress) {
+    pub fn save_player_progress(env: &Env, progress: &PlayerProgress, activated_at: u64) {
         // Store the progress with composite key (hunt_id + player address),
-
         // in compact form (key fields player/hunt_id are not duplicated).
 
         let key = Self::progress_key(progress.hunt_id, &progress.player);
-
-        let activated_at = Self::get_hunt(env, progress.hunt_id)
-            .map(|h| h.activated_at)
-            .unwrap_or(0);
 
         env.storage()
             .persistent()
@@ -1658,6 +1695,45 @@ impl Storage {
             })
     }
 
+    /// Returns up to `count` player addresses starting at `start_index` from
+    /// the persistent registration index for a hunt.
+    ///
+    /// Only the requested slice of the index is read, so paging callers never
+    /// have to load the whole player list (keeping them O(window) instead of
+    /// O(total registrations)). Out-of-range requests return an empty vector.
+    pub fn get_player_addresses_range(
+        env: &Env,
+        hunt_id: u64,
+        start_index: u32,
+        count: u32,
+    ) -> Vec<Address> {
+        let mut addrs = Vec::new(env);
+
+        if count == 0 {
+            return addrs;
+        }
+
+        let total = Self::get_player_count(env, hunt_id);
+
+        if start_index >= total {
+            return addrs;
+        }
+
+        let end = core::cmp::min(start_index.saturating_add(count), total);
+
+        for i in start_index..end {
+            let entry_key = Self::player_entry_key(hunt_id, i);
+
+            if let Some(addr) = env.storage().persistent().get::<_, Address>(&entry_key) {
+                Self::touch_persistent_index(env, &entry_key);
+
+                addrs.push_back(addr);
+            }
+        }
+
+        addrs
+    }
+
     pub fn get_player_addresses_for_hunt(env: &Env, hunt_id: u64) -> Vec<Address> {
         Self::migrate_player_index_from_instance(env, hunt_id);
 
@@ -1898,7 +1974,9 @@ impl Storage {
     pub fn increment_clue_attempt_count(env: &Env, hunt_id: u64, clue_id: u32, player: &Address) {
         let key = Self::clue_attempt_key(hunt_id, clue_id, player);
         let count = env.storage().persistent().get(&key).unwrap_or(0u32);
-        env.storage().persistent().set(&key, &count.saturating_add(1));
+        env.storage()
+            .persistent()
+            .set(&key, &count.saturating_add(1));
         extend_ttl(env, &key, TtlPolicy::Active);
     }
 
@@ -3117,11 +3195,13 @@ mod index_tier_tests {
             )
             .unwrap();
 
-            HuntyCore::activate_hunt(env.clone(), id, creator.clone()).unwrap();
-
-            HuntyCore::register_player(env.clone(), id, player.clone()).unwrap();
-
             id
+        });
+
+        env.as_contract(&contract_id, || {
+            HuntyCore::activate_hunt(env.clone(), hunt_id, creator.clone()).unwrap();
+
+            HuntyCore::register_player(env.clone(), hunt_id, player.clone()).unwrap();
         });
 
         (contract_id, hunt_id, player)
@@ -3149,17 +3229,19 @@ mod index_tier_tests {
 
             let player_marker = Storage::player_exists_key(hunt_id, &player);
 
-            for key in [clue_entry, clue_count, clue_marker] {
+            for key in [clue_entry, clue_marker] {
                 assert!(env.storage().persistent().has(&key));
-
                 assert!(!env.storage().instance().has(&key));
             }
+            assert!(env.storage().persistent().has(&clue_count));
+            assert!(!env.storage().instance().has(&clue_count));
 
-            for key in [player_entry, player_count, player_marker] {
-                assert!(env.storage().persistent().has(&key));
-
-                assert!(!env.storage().instance().has(&key));
-            }
+            assert!(env.storage().persistent().has(&player_entry));
+            assert!(!env.storage().instance().has(&player_entry));
+            assert!(env.storage().persistent().has(&player_marker));
+            assert!(!env.storage().instance().has(&player_marker));
+            assert!(env.storage().persistent().has(&player_count));
+            assert!(!env.storage().instance().has(&player_count));
         });
     }
 

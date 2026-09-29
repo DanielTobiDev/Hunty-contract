@@ -107,6 +107,7 @@ pub struct HuntCache {
     pub total_clues: u32,
     pub required_clues: u32,
     pub max_winners: u32,
+    pub activated_at: u64,
 }
 
 impl HuntCache {
@@ -120,6 +121,7 @@ impl HuntCache {
             total_clues: hunt.total_clues,
             required_clues: hunt.required_clues,
             max_winners: hunt.reward_config.max_winners,
+            activated_at: hunt.activated_at,
         }
     }
 }
@@ -175,12 +177,14 @@ pub struct HuntCancelledEvent {
 /// Emitted when a creator force-closes a hunt early (marks it Completed) while
 /// preserving player scores and any already-distributed rewards. `rewarded_players`
 /// is the number of completed players who received a final reward as part of closing.
+/// `unpaid_players` lists eligible players whose final reward distribution failed.
 #[contracttype]
 #[derive(Clone)]
 pub struct HuntClosedEvent {
     pub hunt_id: u64,
     pub closed_at: u64,
     pub rewarded_players: u32,
+    pub unpaid_players: Vec<Address>,
 }
 
 #[contracttype]
@@ -363,7 +367,7 @@ impl PlayerProgress {
             total_score: self.total_score,
             started_at_delta,
             completed_at_delta,
-            flags: flags.into(),
+            flags,
             recent_submissions: self.recent_submissions.clone(),
             clue_last_attempts: self.clue_last_attempts.clone(),
             required_completed_count: self.required_completed_count,
@@ -449,9 +453,6 @@ impl PlayerProgress {
     ) -> Result<(), crate::errors::HuntErrorCode> {
         if self.has_requested_hint(clue_id) {
             return Err(crate::errors::HuntErrorCode::HintAlreadyUnlocked);
-        }
-        if self.total_score < penalty {
-            return Err(crate::errors::HuntErrorCode::InsufficientScore);
         }
         self.total_score = self.total_score.saturating_sub(penalty);
         self.hinted_clues.push_back(clue_id);
@@ -547,6 +548,14 @@ pub struct HuntStatusChangedEvent {
     pub hunt_id: u64,
     pub old_status: HuntStatus,
     pub new_status: HuntStatus,
+    pub changed_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HuntPrivacyChangedEvent {
+    pub hunt_id: u64,
+    pub is_private: bool,
     pub changed_at: u64,
 }
 
@@ -861,6 +870,14 @@ pub struct TeamMemberJoinedEvent {
 pub struct RegistrationDeadlineSetEvent {
     pub hunt_id: u64,
     pub registration_deadline: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct HuntDifficultyOverrideSetEvent {
+    pub hunt_id: u64,
+    pub caller: Address,
+    pub difficulty_override: Option<u32>,
 }
 
 #[contracttype]
